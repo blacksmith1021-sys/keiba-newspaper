@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.0.1 (2026-03-29)</div>
+<div class="hd-ver">ver 2.0.2 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -1489,7 +1489,7 @@ function doAnalyze(){
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.0.1'};
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
   CUR=id;showView('detail');
@@ -1655,7 +1655,7 @@ function recalcAll(){
 
 function downloadCSV(){
   const BOM='\uFEFF';
-  const header=['日付','競馬場','レース','距離','コース','馬場','券種','買目','馬名','結果','1着','2着','3着','配当(100円あたり)','回収額','投資','利益','回収率','信頼度','軸馬EV'];
+  const header=['日付','競馬場','レース','距離','コース','馬場','券種','買目','馬名','結果','1着','2着','3着','配当(100円あたり)','回収額','投資','利益','回収率','信頼度','軸馬EV','◎馬番','◎スコア','◎EV','○馬番','○スコア','○EV'];
   const rows=[];
   const sorted=[...RACES].filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).sort((a,b)=>{const ka=a.sortKey||a.id;const kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0});
   sorted.forEach(r=>{
@@ -1693,7 +1693,9 @@ function downloadCSV(){
       hasR?profit:'',
       hasR&&inv>0?Math.round(ret/inv*100)+'%':'',
       r.bet?.confidence||'',
-      r.scored?.[0]?.ev||''
+      r.bet?.best?.ev||r.scored?.[0]?.ev||'',
+      r.scored?.[0]?.num||'',r.scored?.[0]?.ns||'',r.scored?.[0]?.ev||'',
+      r.scored?.[1]?.num||'',r.scored?.[1]?.ns||'',r.scored?.[1]?.ev||''
     ]);
   });
   // 合計行
@@ -1702,7 +1704,7 @@ function downloadCSV(){
   const totalRet=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   rows.push([]);
   rows.push(['合計','','','','','','','','','',
-    '','','','',totalRet,totalBet,totalRet-totalBet,totalBet>0?Math.round(totalRet/totalBet*100)+'%':'','','']);
+    '','','','',totalRet,totalBet,totalRet-totalBet,totalBet>0?Math.round(totalRet/totalBet*100)+'%':'','','','','','','','','']);
   
   const csv=BOM+[header,...rows].map(row=>row.map(cell=>{
     const s=String(cell==null?'':cell);
@@ -2548,23 +2550,29 @@ async function doGhLoad(){
     banner.textContent='✅ GitHubからデータを自動復元しました（'+RACES.length+'レース）';
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
-  // 3. 起動時に全レースをv2.0重みで自動再スコアリング
+  // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
+  const SCORE_VER='v2.0.1';
   HORSE_DB=buildHorseDB();
   let rescored=0;
   RACES.forEach(r=>{
     if(!r.scored||r.scored.length===0||r.id?.startsWith('bulk_')||r.id?.startsWith('csv_'))return;
+    if(r._scoreVer===SCORE_VER)return; // 既に最新バージョンで計算済み
     try{
       const race={horses:r.scored.map(h=>({
         num:h.num,name:h.name,waku:h.waku,odds:h.odds,pop:h.pop,
         rec:h.rec,starts:h.starts,wt:h.wt,wc:h.wc,sex:h.sex,age:h.age,
         jk:h.jk,jkDiscount:h.jkDiscount,imp:h.imp,sire:h.sire,bms:h.bms,trainer:h.trainer,bl:h.bl,prev:h.prev||[],prize:h.prize
       })),info:r.info};
+      const oldTop=r.scored[0]?.ns||0;
       r.scored=score(race);
       r.bet=genBet(r.scored,r.info);
+      r._scoreVer=SCORE_VER;
+      const newTop=r.scored[0]?.ns||0;
+      if(rescored===0)console.log('再スコア例: '+r.label+' 旧top='+oldTop+' → 新top='+newTop+' EV='+r.scored[0]?.ev);
       rescored++;
     }catch(e){console.warn('再スコア失敗:',r.label,e)}
   });
-  if(rescored>0){saveR(RACES);console.log(rescored+'レースをv2.0重みで再スコアリング完了')}
+  if(rescored>0){saveR(RACES);console.log(rescored+'レースをSCORE_VER='+SCORE_VER+'で再スコアリング完了')}
   // snapshotの遡及生成
   RACES.forEach(r=>{
     if(r.result?.top3?.length>=3&&r.scored?.length>0&&!r.result.analysisSnapshot&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r)){
