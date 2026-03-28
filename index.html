@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.3.2 (2026-03-28)</div>
+<div class="hd-ver">ver 1.4.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -112,6 +112,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <button onclick="showView('trends')">📊 ファクター</button>
 <button onclick="showView('sync')">☁️ 同期</button>
 </nav>
+<div id="todaySummary" style="max-width:900px;margin:0 auto;padding:4px 8px"></div>
 <div class="ct">
 <div id="vInput"></div>
 <div id="vList" class="hidden"></div>
@@ -663,7 +664,7 @@ if(h.prize&&h.prize>0){const ap=hs.filter(x=>x.prize&&x.prize>0).map(x=>x.prize)
 // スコア上限を撤廃（0未満のみ防止）
 h.score=Math.min(150,Math.max(0,s));h.f=f});
 // 正規化は最高得点を100として相対値
-const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100)});hs.sort((a,b)=>b.score-a.score);return hs}
+const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round(h.ns*h.odds/100*100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
 
 // ===== BET (v17: ワイド主軸200円+馬連添え100円=300円、レース質判定付き) =====
 function genBet(scored,raceInfo){
@@ -740,19 +741,25 @@ function genBet(scored,raceInfo){
   }
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
-  const A=stables[0]?.h,B=stables[1]?.h;
+  let A=stables[0]?.h,B=stables[1]?.h;
   const ssA=stables[0]?.ss||0,ssB=stables[1]?.ss||0;
 
-  // 信頼度判定：stables全体の平均と比較して相対評価（二重計算を解消）
-  const allSS=stables.map(x=>x.ss);
-  const avgSS=allSS.length>0?allSS.reduce((a,b)=>a+b,0)/allSS.length:0;
-  const advantage=(ssA+ssB)/2-avgSS;
-  const topDiff=ssA-ssB;
+  // 信頼度判定：軸馬のnormalizedスコア(ns)とスコア差で判定
+  const nsA=stables[0]?.h?.ns||0;
+  const nsB=stables[1]?.h?.ns||0;
+  const nsDiff=nsA-nsB;
 
   let confidence='',confLevel=1;
-  if(advantage>=25&&topDiff>=10){confidence='★★★ 高';confLevel=3}
-  else if(advantage>=15){confidence='★★ 中';confLevel=2}
+  if(nsA>=90&&nsDiff>=10){confidence='★★★ 高';confLevel=3}
+  else if(nsA>=75){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
+
+  // 期待値スコア(ev)が高い馬を軸候補として優先（A, Bの入れ替え検討）
+  const evA=stables[0]?.h?.ev||0,evB=stables[1]?.h?.ev||0;
+  if(evB>evA*1.3&&stables[1]){
+    const tmp=stables[0];stables[0]=stables[1];stables[1]=tmp;
+    A=stables[0].h;B=stables[1].h;
+  }
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
@@ -777,14 +784,17 @@ function genBet(scored,raceInfo){
   const estU=eU(A,B);
   const estW=C?eW(B,C):0;
 
-  // 見送り判断：レース質不良 OR 自信度★低
+  // 見送り判断：★低 OR レース質不良
   const skipRecommended=confLevel===1||poorRace;
   const skipReason=poorRace
     ?'レース質不良（'+raceQuality.reasons.join('・')+'）'
     :'自信度★のため見送りを推奨します。';
 
-  const umaAmt=100;
-  const wideAmt=200;
+  // 信頼度に応じた投資額：★★★=500円、★★=300円、★=0円(見送り)
+  const invTable={3:{uma:170,wide:330},2:{uma:100,wide:200},1:{uma:0,wide:0}};
+  const invConf=invTable[confLevel];
+  const umaAmt=skipRecommended?0:invConf.uma;
+  const wideAmt=skipRecommended?0:invConf.wide;
 
   const tickets=skipRecommended?[]:[
     {type:'馬連',desc:A.num+'─'+B.num,amount:umaAmt,horses:[A,B],est:estU,
@@ -792,7 +802,7 @@ function genBet(scored,raceInfo){
     ...(C?[{type:'ワイド',desc:B.num+'─'+C.num,amount:wideAmt,horses:[B,C],est:estW,
      reason:'主軸：'+B.num+'番─'+C.num+'番'+(favIsOverrated?'（1番人気=過剰人気のため除外）':'（1番人気=実力馬のため含む可能性あり）')}]:[])
   ];
-  const totalInv=skipRecommended?0:C?300:100;
+  const totalInv=skipRecommended?0:umaAmt+(C?wideAmt:0);
 
   // 戦略説明
   const favNote=favIsOverrated
@@ -1036,7 +1046,7 @@ function getHitInfo(r){
   else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
   else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
   
-  const inv=bt?.totalInv||((bt?.wideAmount||0)+(bt?.fukAmount||0))||300;
+  const inv=(bt?.totalInv!=null?bt.totalInv:((bt?.wideAmount||0)+(bt?.fukAmount||0)))||0;
   const wAmt=bt?.wideAmount||0;
   const fAmt=bt?.fukAmount||0;
   const fukNum=bt?.fukushoHorse?.num;
@@ -1243,6 +1253,31 @@ function updatePhaseBanner(){
   document.querySelector('.ct').prepend(banner);
 }
 
+function updateTodaySummary(){
+  const el=document.getElementById('todaySummary');if(!el)return;
+  const today=new Date();
+  const todayStr=today.getFullYear()+'/'+(today.getMonth()+1)+'/'+today.getDate();
+  const todayRaces=RACES.filter(r=>r.info?.date===todayStr&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  if(todayRaces.length===0){el.innerHTML='';return}
+  const done=todayRaces.filter(r=>r.result?.top3?.length>=3);
+  const bought=done.filter(r=>(getHitInfo(r).inv||0)>0);
+  const hits=bought.filter(r=>getHitInfo(r).anyHit);
+  const inv=bought.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
+  const ret=bought.reduce((s,r)=>s+getHitInfo(r).ret,0);
+  const pnl=ret-inv;
+  const roi=inv>0?Math.round(ret/inv*100):0;
+  el.innerHTML=`<div style="background:var(--p);border:2px solid var(--bdt);border-radius:4px;padding:8px 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
+    <span style="font-weight:900;font-size:13px">本日</span>
+    <span>分析 <b>${todayRaces.length}</b>R</span>
+    <span>購入 <b>${bought.length}</b>R</span>
+    <span style="color:var(--grn)">的中 <b>${hits.length}</b></span>
+    <span>投資 <b>${inv.toLocaleString()}円</b></span>
+    <span>回収 <b>${ret.toLocaleString()}円</b></span>
+    <span style="font-weight:900;font-size:15px;color:${pnl>=0?'var(--grn)':'var(--red)'}">${pnl>=0?'+':''}${pnl.toLocaleString()}円</span>
+    <span style="color:${roi>=100?'var(--grn)':'var(--red)'}">回収率 <b>${roi}%</b></span>
+  </div>`;
+}
+
 function showView(v){
   ['vInput','vList','vDetail','vTrends','vSync'].forEach(id=>document.getElementById(id).className='hidden');
   document.getElementById('v'+v.charAt(0).toUpperCase()+v.slice(1)).className='';
@@ -1252,6 +1287,7 @@ function showView(v){
   if(v==='detail'&&CUR)renderDetail(CUR);
   if(v==='sync')renderSyncView();
   updatePhaseBanner();
+  updateTodaySummary();
 }
 
 // === INPUT ===
@@ -1492,7 +1528,7 @@ function renderList(){
   const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
   const hits=done.filter(r=>getHitInfo(r).wideHit).length;
   const fukHits=done.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
-  const totalBet=done.reduce((s,r)=>s+(getHitInfo(r).inv||r.bet?.totalInv||300),0);
+  const totalBet=done.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
   const totalReturn=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   const profit=totalReturn-totalBet;
   
@@ -1526,7 +1562,7 @@ function renderList(){
     const dayDone=dayRaces.filter(r=>r.result?.top3?.length>=3&&!isPastOnly(r));
     const dayHits=dayDone.filter(r=>getHitInfo(r).wideHit).length;
     const dayFuk=dayDone.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
-    const dayInv=dayDone.reduce((s,r)=>s+(getHitInfo(r).inv||r.bet?.totalInv||300),0);
+    const dayInv=dayDone.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
     const dayRet=dayDone.reduce((s,r)=>s+getHitInfo(r).ret,0);
     const dayProfit=dayRet-dayInv;
     const dayRoi=dayInv>0?Math.round(dayRet/dayInv*100):0;
@@ -1559,7 +1595,7 @@ function renderList(){
       const hi=getHitInfo(r);
       const cls=hasR?(hi.anyHit?'hit':'miss'):'pend';
       const betInfo=r.bet?.best?r.bet.best.type+' '+r.bet.best.desc:'';
-      const inv=hi.inv||r.bet?.totalInv||300;
+      const inv=hi.inv||0;
       let profitStr='';
       if(hasR){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
       const venue=(r.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
@@ -1568,7 +1604,7 @@ function renderList(){
       h+=`<div class="card ${cls}" onclick="CUR='${r.id}';showView('detail')">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:14px"><span style="font-weight:900">${venue}</span> ${r.info.raceNum||'?'}R${pastLabel}</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:1px">${r.info.dist||''}m ${r.info.surf||''}${r.info.cond?' / '+r.info.cond:''}${betInfo?' ／ '+betInfo:''}</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:1px">${r.info.dist||''}m ${r.info.surf||''}${r.info.cond?' / '+r.info.cond:''}${(!r.info.surf||!r.info.cond)?'<span style="color:var(--red);font-weight:700"> ⚠馬場未入力</span>':''}${betInfo?' ／ '+betInfo:''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
           ${hasR?`<div style="font-weight:900;font-size:12px;color:${hi.anyHit?'var(--grn)':'var(--red)'}">${hi.label==='的中'?'✓ 馬連':hi.label==='ワイド的中'?'◎ ワイド':hi.label==='複勝的中'?'△ 複勝':'✗'}</div>
@@ -1624,7 +1660,7 @@ function recalcAll(){
 
 function downloadCSV(){
   const BOM='\uFEFF';
-  const header=['日付','競馬場','レース','距離','コース','馬場','券種','買目','馬名','結果','1着','2着','3着','配当(100円あたり)','回収額','投資','利益','回収率'];
+  const header=['日付','競馬場','レース','距離','コース','馬場','券種','買目','馬名','結果','1着','2着','3着','配当(100円あたり)','回収額','投資','利益','回収率','信頼度','軸馬EV'];
   const rows=[];
   const sorted=[...RACES].filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).sort((a,b)=>{const ka=a.sortKey||a.id;const kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0});
   sorted.forEach(r=>{
@@ -1636,7 +1672,7 @@ function downloadCSV(){
     const betNames=r.bet?.best?.horses?.map(h=>h.name).join('×')||'';
     const payout=r.result?.payout||0;
     const ret=hi.ret;
-    const inv=hi.inv||r.bet?.totalInv||300;
+    const inv=hi.inv||0;
     const profit=ret-inv;
     const nameOf=n=>{const h=r.scored?.find(x=>x.num===+n);return h?h.name:''};
     const t1=hasR?r.result.top3[0]:'';
@@ -1660,7 +1696,9 @@ function downloadCSV(){
       hasR?ret:'',
       inv,
       hasR?profit:'',
-      hasR&&inv>0?Math.round(ret/inv*100)+'%':''
+      hasR&&inv>0?Math.round(ret/inv*100)+'%':'',
+      r.bet?.confidence||'',
+      r.scored?.[0]?.ev||''
     ]);
   });
   // 合計行
@@ -1669,7 +1707,7 @@ function downloadCSV(){
   const totalRet=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   rows.push([]);
   rows.push(['合計','','','','','','','','','',
-    '','','','',totalRet,totalBet,totalRet-totalBet,totalBet>0?Math.round(totalRet/totalBet*100)+'%':'']);
+    '','','','',totalRet,totalBet,totalRet-totalBet,totalBet>0?Math.round(totalRet/totalBet*100)+'%':'','','']);
   
   const csv=BOM+[header,...rows].map(row=>row.map(cell=>{
     const s=String(cell==null?'':cell);
@@ -1757,6 +1795,10 @@ function renderDetail(id){
     </div>`;
   } else {
   // Top5
+  // 馬場・コースデータ欠損チェック
+  if(!r.info.surf||!r.info.cond||!r.info.type){
+    h+=`<div style="background:rgba(196,30,58,.08);border:2px solid var(--red);padding:10px 14px;margin-bottom:8px;border-radius:4px;font-size:13px;font-weight:700;color:var(--red)">⚠️ 馬場データ未入力 — ${!r.info.surf?'コース ':''}${!r.info.cond?'馬場状態 ':''}${!r.info.type?'芝/ダート ':''}が不足しています。予想精度が低下する可能性があります。</div>`;
+  }
   h+=`<div class="pnl"><h3 class="r" style="display:flex;align-items:center;justify-content:space-between">◎○▲ 予想<button onclick="document.getElementById('helpPanel').classList.toggle('hidden')" style="font-size:11px;font-weight:500;color:var(--blu);background:var(--p2);border:1px solid var(--bdr);padding:2px 10px;cursor:pointer;font-family:'Noto Sans JP',sans-serif">？ 見方ガイド</button></h3>`;
   // Help panel
   h+=`<div id="helpPanel" class="hidden" style="background:var(--p2);border:1px solid var(--bdr);padding:12px;margin-bottom:10px;font-size:12px;line-height:1.8;color:var(--ink)">
@@ -1810,6 +1852,7 @@ function renderDetail(id){
     <span style="font-weight:700">${x.name}</span>
     <span style="font-size:11px;color:var(--dim)">${x.jk||''}</span>
     <span style="font-size:10px">${tags}</span>
+    ${x.ev?`<span style="font-size:10px;color:var(--blu);font-weight:700;min-width:32px;text-align:right" title="期待値スコア">EV${x.ev}</span>`:''}
     <span class="sc">${x.ns}</span></div>`;
   });h+=`</div>`;
   // Bet - 馬連+ワイド 400円
