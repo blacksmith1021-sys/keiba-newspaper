@@ -77,8 +77,6 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 .sync-err{background:rgba(196,30,58,.08);border:1px solid var(--red);color:var(--red)}
 .sync-info{background:rgba(26,68,136,.08);border:1px solid var(--blu);color:var(--blu)}
 .sync-time{font-size:11px;color:var(--lt);margin-top:4px}
-.gas-code{background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;font-size:11px;font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;line-height:1.5;margin-top:8px}
-.gas-code .kw{color:#569cd6}.gas-code .fn{color:#dcdcaa}.gas-code .str{color:#ce9178}.gas-code .cm{color:#6a9955}
 .fs-badge{display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;vertical-align:middle;margin-left:6px}
 .fs-on{background:rgba(45,106,48,.15);color:var(--grn);border:1px solid var(--grn)}
 .fs-off{background:rgba(196,30,58,.1);color:var(--lt);border:1px solid var(--bdr)}
@@ -106,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.2.0 (2026-03-28)</div>
+<div class="hd-ver">ver 1.3.0 (2026-03-28)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -2258,41 +2256,40 @@ function renderTrends(){
   document.getElementById('vTrends').innerHTML=h;
 }
 
-// ===== SPREADSHEET SYNC (JSONP + no-cors POST: CORSエラー回避) =====
-const SYNC_URL_KEY='keiba-gas-url';
-const SYNC_TIME_KEY='keiba-last-sync';
-function getSyncUrl(){const s=loadSettings();return s.gasUrl||''}
-function setSyncUrl(u){const s=loadSettings();s.gasUrl=u;saveSettings(s)}
+// ===== CLOUD SYNC (GitHub API) =====
+const GH_REPO='blacksmith1021-sys/keiba-newspaper';
+const GH_API='https://api.github.com';
+function getGhToken(){const s=loadSettings();return s.ghToken||''}
+function setGhToken(t){const s=loadSettings();s.ghToken=t;saveSettings(s)}
 function getLastSync(){const s=loadSettings();return s.lastSync||''}
 function setLastSync(t){const s=loadSettings();s.lastSync=t;saveSettings(s)}
 
-// --- JSONP通信 (scriptタグ経由 → CORSの制約を受けない) ---
-function jsonp(url,params,timeout=30000){
-  return new Promise((resolve,reject)=>{
-    const cb='_gasCb_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
-    const timer=setTimeout(()=>{
-      delete window[cb];sc.remove();
-      reject(new Error('通信タイムアウト（30秒）'));
-    },timeout);
-    window[cb]=function(data){
-      clearTimeout(timer);delete window[cb];sc.remove();
-      resolve(data);
-    };
-    const qs=new URLSearchParams({...params,callback:cb}).toString();
-    const sc=document.createElement('script');
-    sc.src=url+'?'+qs;
-    sc.onerror=()=>{
-      clearTimeout(timer);delete window[cb];sc.remove();
-      reject(new Error('GAS接続エラー（URLを確認してください）'));
-    };
-    document.head.appendChild(sc);
+// --- GitHub API helpers ---
+async function ghGet(path,token){
+  const res=await fetch(`${GH_API}/repos/${GH_REPO}/contents/${path}`,{
+    headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json'}
   });
+  if(res.status===404)return null;
+  if(!res.ok)throw new Error(`GitHub GET ${res.status}: ${(await res.json()).message}`);
+  return await res.json();
+}
+async function ghPut(path,content,token,sha){
+  const body={message:`sync: update ${path}`,content:btoa(unescape(encodeURIComponent(content)))};
+  if(sha)body.sha=sha;
+  const res=await fetch(`${GH_API}/repos/${GH_REPO}/contents/${path}`,{
+    method:'PUT',
+    headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  if(!res.ok){const e=await res.json();throw new Error(`GitHub PUT ${res.status}: ${e.message}`)}
+  return await res.json();
 }
 
 function renderSyncView(){
-  const url=getSyncUrl();
+  const token=getGhToken();
   const lastSync=getLastSync();
   const fsConnected=!!_dirHandle;
+  const ghConnected=!!token;
   let h=`
 <div class="pnl">
 <h3 class="g">💾 ローカルファイル保存</h3>
@@ -2312,177 +2309,36 @@ ${fsConnected?'<div style="margin-top:6px;font-size:11px;color:var(--lt)">保存
 </div>
 
 <div class="pnl">
-<h3 class="b">☁️ Googleスプレッドシート連携</h3>
+<h3 class="b">☁️ GitHubクラウド同期</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
-レースデータ・馬DBをGoogleスプレッドシートにバックアップ・同期できます。<br>
-下記の手順でGoogle Apps Scriptをデプロイし、URLを入力してください。
+レースデータ・馬DBをGitHubリポジトリにバックアップできます。<br>
+どの端末からでもデータを復元できます。
 </div>
-<div style="margin-bottom:8px"><b style="font-size:13px">GAS Web App URL:</b></div>
-<input type="text" class="sync-url" id="gasUrl" value="${url}" placeholder="https://script.google.com/macros/s/xxxxx/exec">
+<div style="margin-bottom:8px"><b style="font-size:13px">GitHub Personal Access Token:</b></div>
+<input type="password" class="sync-url" id="ghTokenInput" value="${token}" placeholder="ghp_xxxxx（repoスコープ必須）">
+<div style="margin-top:6px;font-size:11px;color:var(--dim)">
+<a href="https://github.com/settings/tokens/new?scopes=repo&description=keiba-newspaper-sync" target="_blank" style="color:var(--blu)">トークン発行ページ</a>
+ — repoにチェック → Generate token → 上にペースト
+</div>
 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-<button class="btn btn-b" onclick="doSyncSave()" id="syncSaveBtn">📤 スプレッドシートに保存</button>
-<button class="btn btn-s" onclick="doSyncLoad()" id="syncLoadBtn">📥 スプレッドシートから復元</button>
+<button class="btn btn-b" onclick="doGhSave()" id="syncSaveBtn">📤 GitHubに保存</button>
+<button class="btn btn-s" onclick="doGhLoad()" id="syncLoadBtn">📥 GitHubから復元</button>
 </div>
 <div id="syncStatus"></div>
 ${lastSync?`<div class="sync-time">最終同期: ${lastSync}</div>`:''}
 </div>
 
 <div class="pnl">
-<h3>セットアップ手順</h3>
-<div style="font-size:12px;line-height:1.8;color:var(--ink)">
-<b>1.</b> <a href="https://sheets.google.com" target="_blank" style="color:var(--blu)">Google スプレッドシート</a>を新規作成<br>
-<b>2.</b> メニュー「拡張機能」→「Apps Script」を開く<br>
-<b>3.</b> 下記のコードを全てコピーして貼り付け → 保存<br>
-<b>4.</b>「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」<br>
-<b>5.</b> アクセスできるユーザー: <b>「全員」</b>を選択 →「デプロイ」<br>
-<b>6.</b> 表示されたURLをコピーして上の欄に貼り付け<br>
-<b style="color:var(--red)">※ コードを修正した場合は「デプロイを管理」→ 鉛筆アイコン → バージョン「新しいバージョン」→「デプロイ」</b>
-</div>
-<button class="btn-s" onclick="toggleGasCode()" style="margin-top:8px">GASコードを表示/非表示</button>
-<div id="gasCodeBlock" class="hidden">
-<button class="btn-s" onclick="copyGasCode()" style="margin-top:8px;margin-bottom:4px">📋 コードをコピー</button>
-<div class="gas-code" id="gasCodeContent"></div>
-</div>
-</div>
-
-<div class="pnl">
 <h3>データ状況</h3>
 <div style="font-size:13px;line-height:1.8">
-ストレージ: <b>${fsConnected?'ファイル + localStorage':'localStorage のみ'}</b><br>
+ストレージ: <b>${fsConnected?'ファイル + localStorage':'localStorage のみ'}</b>
+${ghConnected?' / <span class="fs-badge fs-on">GitHub連携 ON</span>':''}<br>
 レース数: <b>${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}</b> 件（予想）/ <b>${RACES.filter(r=>r.id?.startsWith('bulk_')).length}</b> 件（一括取込）<br>
 馬DB: <b>${Object.keys(HORSE_STORE).length}</b> 頭
-<div id="dataPathInfo" style="margin-top:4px"></div>
 </div>
 </div>`;
   document.getElementById('vSync').innerHTML=h;
-  document.getElementById('gasCodeContent').textContent=GAS_CODE;
-  if(IS_ELECTRON){
-    window.electronStorage.getPath().then(p=>{
-      const el=document.getElementById('dataPathInfo');
-      if(el)el.innerHTML='保存先: <code style="font-size:11px;background:var(--p2);padding:2px 6px;border-radius:3px">'+p+'</code>';
-    });
-  }
 }
-
-const GAS_CODE=`// Google Apps Script - 競馬ファクター新聞 スプレッドシート連携 v2 (JSONP対応)
-// このコードをApps Scriptエディタに貼り付けてデプロイしてください
-// デプロイ時「アクセスできるユーザー」は「全員」を選択
-
-// === JSONP GET: データ読み込み・保存確認（CORSを回避） ===
-function doGet(e) {
-  var callback = e.parameter.callback || 'callback';
-  try {
-    var action = e.parameter.action || 'status';
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-
-    if (action === 'load') {
-      var rSheet = ss.getSheetByName('RACES');
-      var hSheet = ss.getSheetByName('HORSE_STORE');
-      if (!rSheet) {
-        return _jsonp(callback, {ok:false, msg:'データが見つかりません。先に保存してください。'});
-      }
-      var rChunkCount = Number(rSheet.getRange(3,2).getValue()) || 1;
-      var rParts = [];
-      for (var i = 0; i < rChunkCount; i++) {
-        rParts.push(rSheet.getRange(2, i+2).getValue());
-      }
-      var races = JSON.parse(rParts.join(''));
-      var updated = rSheet.getRange(1,2).getValue();
-      var horseStore = {};
-      if (hSheet) {
-        var hChunkCount = Number(hSheet.getRange(3,2).getValue()) || 1;
-        var hParts = [];
-        for (var j = 0; j < hChunkCount; j++) {
-          hParts.push(hSheet.getRange(2, j+2).getValue());
-        }
-        horseStore = JSON.parse(hParts.join(''));
-      }
-      return _jsonp(callback, {ok:true, races:races, horseStore:horseStore, updated:updated});
-    }
-
-    if (action === 'status') {
-      var rSheet = ss.getSheetByName('RACES');
-      var info = {ok:true, hasData:!!rSheet};
-      if (rSheet) {
-        info.updated = rSheet.getRange(1,2).getValue();
-        info.raceChunks = Number(rSheet.getRange(3,2).getValue()) || 0;
-      }
-      var hSheet = ss.getSheetByName('HORSE_STORE');
-      if (hSheet) {
-        info.horseChunks = Number(hSheet.getRange(3,2).getValue()) || 0;
-      }
-      return _jsonp(callback, info);
-    }
-
-    return _jsonp(callback, {ok:false, msg:'Unknown action'});
-  } catch(err) {
-    return _jsonp(callback, {ok:false, msg:err.toString()});
-  }
-}
-
-function _jsonp(callback, data) {
-  return ContentService
-    .createTextOutput(callback + '(' + JSON.stringify(data) + ')')
-    .setMimeType(ContentService.MimeType.JAVASCRIPT);
-}
-
-// === POST: データ保存 ===
-function doPost(e) {
-  try {
-    var lock = LockService.getScriptLock();
-    lock.waitLock(30000);
-    var data = JSON.parse(e.postData.contents);
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-
-    if (data.action === 'save') {
-      var rSheet = ss.getSheetByName('RACES') || ss.insertSheet('RACES');
-      rSheet.clear();
-      rSheet.getRange(1,1).setValue('updated');
-      rSheet.getRange(1,2).setValue(new Date().toISOString());
-      rSheet.getRange(2,1).setValue('data');
-      var rJson = JSON.stringify(data.races);
-      var chunks = splitString(rJson, 45000);
-      for (var i = 0; i < chunks.length; i++) {
-        rSheet.getRange(2, i+2).setValue(chunks[i]);
-      }
-      rSheet.getRange(3,1).setValue('chunks');
-      rSheet.getRange(3,2).setValue(chunks.length);
-
-      var hSheet = ss.getSheetByName('HORSE_STORE') || ss.insertSheet('HORSE_STORE');
-      hSheet.clear();
-      hSheet.getRange(1,1).setValue('updated');
-      hSheet.getRange(1,2).setValue(new Date().toISOString());
-      hSheet.getRange(2,1).setValue('data');
-      var hJson = JSON.stringify(data.horseStore);
-      var hChunks = splitString(hJson, 45000);
-      for (var j = 0; j < hChunks.length; j++) {
-        hSheet.getRange(2, j+2).setValue(hChunks[j]);
-      }
-      hSheet.getRange(3,1).setValue('chunks');
-      hSheet.getRange(3,2).setValue(hChunks.length);
-
-      lock.releaseLock();
-      return ContentService.createTextOutput(JSON.stringify({
-        ok:true, races:data.races.length, horses:Object.keys(data.horseStore).length
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    lock.releaseLock();
-    return ContentService.createTextOutput(JSON.stringify({ok:false, msg:'Unknown action'}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch(err) {
-    return ContentService.createTextOutput(JSON.stringify({ok:false, msg:err.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function splitString(str, size) {
-  var chunks = [];
-  for (var i = 0; i < str.length; i += size) {
-    chunks.push(str.substring(i, i + size));
-  }
-  return chunks;
-}`;
 
 async function doConnectFolder(){
   const ok=await connectFolder();
@@ -2500,77 +2356,69 @@ async function doConnectFolder(){
   renderSyncView();
 }
 
-function toggleGasCode(){
-  document.getElementById('gasCodeBlock').classList.toggle('hidden');
-}
-
-function copyGasCode(){
-  navigator.clipboard.writeText(GAS_CODE).then(()=>{
-    const btn=event.target;btn.textContent='✅ コピーしました';
-    setTimeout(()=>btn.textContent='📋 コードをコピー',2000);
-  }).catch(()=>{
-    const ta=document.createElement('textarea');ta.value=GAS_CODE;
-    document.body.appendChild(ta);ta.select();document.execCommand('copy');
-    document.body.removeChild(ta);
-    const btn=event.target;btn.textContent='✅ コピーしました';
-    setTimeout(()=>btn.textContent='📋 コードをコピー',2000);
-  });
-}
-
 function showSyncStatus(msg,type){
   const el=document.getElementById('syncStatus');
   if(!el)return;
   el.innerHTML=`<div class="sync-status sync-${type}">${msg}</div>`;
 }
 
-async function doSyncSave(){
-  const url=document.getElementById('gasUrl').value.trim();
-  if(!url){showSyncStatus('GAS Web App URLを入力してください','err');return}
-  setSyncUrl(url);
+async function doGhSave(){
+  const token=document.getElementById('ghTokenInput').value.trim();
+  if(!token){showSyncStatus('トークンを入力してください','err');return}
+  setGhToken(token);
   const btn=document.getElementById('syncSaveBtn');
   btn.disabled=true;btn.textContent='⏳ 保存中...';
-  showSyncStatus('スプレッドシートに送信中...','info');
+  showSyncStatus('GitHubにアップロード中...','info');
   try{
-    const payload={action:'save',races:RACES,horseStore:HORSE_STORE};
-    await fetch(url,{method:'POST',mode:'no-cors',body:JSON.stringify(payload)});
-    showSyncStatus('保存確認中...','info');
-    await new Promise(r=>setTimeout(r,3000));
-    const status=await jsonp(url,{action:'status'});
-    if(!status.ok)throw new Error(status.msg||'保存確認に失敗');
+    // 既存ファイルのSHAを取得（更新に必要）
+    const [rExist,hExist]=await Promise.all([
+      ghGet('data/races.json',token),
+      ghGet('data/horse_store.json',token)
+    ]);
+    // アップロード
+    await Promise.all([
+      ghPut('data/races.json',JSON.stringify(RACES),token,rExist?.sha),
+      ghPut('data/horse_store.json',JSON.stringify(HORSE_STORE),token,hExist?.sha)
+    ]);
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
-    showSyncStatus(`✅ 保存完了！<br><span class="sync-time">スプレッドシート更新: ${status.updated||now}</span>`,'ok');
+    showSyncStatus(`✅ 保存完了！ レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭<br><span class="sync-time">保存日時: ${now}</span>`,'ok');
   }catch(e){
     showSyncStatus('❌ エラー: '+e.message,'err');
   }finally{
-    btn.disabled=false;btn.textContent='📤 スプレッドシートに保存';
+    btn.disabled=false;btn.textContent='📤 GitHubに保存';
   }
 }
 
-async function doSyncLoad(){
-  const url=document.getElementById('gasUrl').value.trim();
-  if(!url){showSyncStatus('GAS Web App URLを入力してください','err');return}
-  setSyncUrl(url);
-  if(!confirm('スプレッドシートのデータで上書きします。現在のローカルデータは失われます。よろしいですか？'))return;
+async function doGhLoad(){
+  const token=document.getElementById('ghTokenInput').value.trim();
+  if(!token){showSyncStatus('トークンを入力してください','err');return}
+  setGhToken(token);
+  if(!confirm('GitHubのデータで上書きします。現在のローカルデータは失われます。よろしいですか？'))return;
   const btn=document.getElementById('syncLoadBtn');
   btn.disabled=true;btn.textContent='⏳ 読込中...';
-  showSyncStatus('スプレッドシートからデータを取得中...','info');
+  showSyncStatus('GitHubからデータを取得中...','info');
   try{
-    const data=await jsonp(url,{action:'load'},60000);
-    if(!data.ok)throw new Error(data.msg||'読み込み失敗');
-    RACES=data.races||[];
+    const [rFile,hFile]=await Promise.all([
+      ghGet('data/races.json',token),
+      ghGet('data/horse_store.json',token)
+    ]);
+    if(!rFile)throw new Error('データが見つかりません。先にGitHubに保存してください。');
+    RACES=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
     saveR(RACES);
-    HORSE_STORE=data.horseStore||{};
-    saveHorseStore(HORSE_STORE);
+    if(hFile){
+      HORSE_STORE=JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,'')))));
+      saveHorseStore(HORSE_STORE);
+    }
     HORSE_DB=buildHorseDB();
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
-    showSyncStatus(`✅ 復元完了！ レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭<br><span class="sync-time">スプレッドシート保存日時: ${data.updated||'不明'}</span>`,'ok');
+    showSyncStatus(`✅ 復元完了！ レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭`,'ok');
     updateCountBadge();
   }catch(e){
     showSyncStatus('❌ エラー: '+e.message,'err');
   }finally{
-    btn.disabled=false;btn.textContent='📥 スプレッドシートから復元';
+    btn.disabled=false;btn.textContent='📥 GitHubから復元';
   }
 }
 
