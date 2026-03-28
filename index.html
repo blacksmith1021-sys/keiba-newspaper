@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.1.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.1.1 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -753,12 +753,10 @@ function genBet(scored,raceInfo){
   // C: ヒモ候補（ns50-79）からA,B以外、またはaxis残り
   let C=himoPool.filter(h=>h!==A&&h!==B)[0]||axisPool.filter(h=>h!==A&&h!==B)[0]||null;
 
-  // ===== 改修4: 見送り基準の数値化 =====
+  // ===== 見送り基準（2条件のみ） =====
   const topNs=scored[0]?.ns||0;
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
-  const hasTrackData=!!(raceInfo?.surf&&raceInfo?.cond);
-  const buyOk=topNs>=70&&nsDiff>=5&&hasTrackData&&!poorRace;
-  const skipRecommended=!buyOk;
+  const skipRecommended=topNs<70||nsDiff<5;
 
   // 信頼度（表示用）
   const axisEv=A?.ev||0;
@@ -767,7 +765,7 @@ function genBet(scored,raceInfo){
   else if(axisEv>=10){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
 
-  const skipReason=!hasTrackData?'コース・馬場データ未入力':topNs<70?'最高スコア不足('+topNs+')':nsDiff<5?'上位スコア差不足(差'+nsDiff+')':poorRace?'レース質不良（'+raceQuality.reasons.join('・')+'）':'条件未達';
+  const skipReason=topNs<70?'最高スコア不足('+topNs+')':'上位スコア差不足(差'+nsDiff+')';
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
@@ -1493,7 +1491,7 @@ function doAnalyze(){
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.0.1'};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.1.1'};
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
   CUR=id;showView('detail');
@@ -2562,7 +2560,7 @@ async function doGhLoad(){
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
-  const SCORE_VER='v2.0.1';
+  const SCORE_VER='v2.1.1';
   HORSE_DB=buildHorseDB();
   let rescored=0;
   RACES.forEach(r=>{
