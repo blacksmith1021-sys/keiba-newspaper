@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.5.0 (2026-03-29)</div>
+<div class="hd-ver">ver 1.5.1 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -2469,16 +2469,28 @@ async function doGhSave(){
   const token=document.getElementById('ghTokenInput').value.trim();
   if(!token){showSyncStatus('トークンを入力してください','err');return}
   setGhToken(token);
+  // 空データの上書き防止
+  if(RACES.length===0&&Object.keys(HORSE_STORE).length===0){
+    showSyncStatus('❌ ローカルにデータがありません。空データでGitHubを上書きすることはできません。','err');return;
+  }
+  // リモートにデータが存在する場合、ローカルの方が少なければ警告
   const btn=document.getElementById('syncSaveBtn');
-  btn.disabled=true;btn.textContent='⏳ 保存中...';
-  showSyncStatus('GitHubにアップロード中...','info');
+  btn.disabled=true;btn.textContent='⏳ 確認中...';
   try{
-    // 既存ファイルのSHAを取得（並列OK）
-    const [rExist,hExist]=await Promise.all([
-      ghGet('data/races.json',token),
-      ghGet('data/horse_store.json',token)
-    ]);
-    // アップロード（逐次実行 — 並列だと409 Conflictになる）
+    const rExist=await ghGet('data/races.json',token);
+    const hExist=await ghGet('data/horse_store.json',token);
+    if(rExist){
+      try{
+        const remote=JSON.parse(decodeURIComponent(escape(atob(rExist.content.replace(/\n/g,'')))));
+        if(remote.length>0&&RACES.length<remote.length){
+          if(!confirm(`⚠️ GitHubにはレース${remote.length}件ありますが、ローカルは${RACES.length}件です。\nデータが減ります。本当に上書きしますか？`)){
+            btn.disabled=false;btn.textContent='📤 GitHubに保存';return;
+          }
+        }
+      }catch{}
+    }
+    btn.textContent='⏳ 保存中...';
+    showSyncStatus('GitHubにアップロード中...','info');
     await ghPut('data/races.json',JSON.stringify(RACES),token,rExist?.sha);
     await ghPut('data/horse_store.json',JSON.stringify(HORSE_STORE),token,hExist?.sha);
     const now=new Date().toLocaleString('ja-JP');
@@ -2495,22 +2507,27 @@ async function doGhLoad(){
   const token=document.getElementById('ghTokenInput').value.trim();
   if(!token){showSyncStatus('トークンを入力してください','err');return}
   setGhToken(token);
-  if(!confirm('GitHubのデータで上書きします。現在のローカルデータは失われます。よろしいですか？'))return;
   const btn=document.getElementById('syncLoadBtn');
-  btn.disabled=true;btn.textContent='⏳ 読込中...';
-  showSyncStatus('GitHubからデータを取得中...','info');
+  btn.disabled=true;btn.textContent='⏳ 確認中...';
+  showSyncStatus('GitHubのデータを確認中...','info');
   try{
     const [rFile,hFile]=await Promise.all([
       ghGet('data/races.json',token),
       ghGet('data/horse_store.json',token)
     ]);
     if(!rFile)throw new Error('データが見つかりません。先にGitHubに保存してください。');
-    RACES=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
-    saveR(RACES);
-    if(hFile){
-      HORSE_STORE=JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,'')))));
-      saveHorseStore(HORSE_STORE);
+    const remoteRaces=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
+    const remoteHorses=hFile?JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,''))))):{};
+    if(remoteRaces.length===0&&Object.keys(remoteHorses).length===0){
+      throw new Error('GitHubのデータが空です（レース0件、馬DB0頭）。先にデータがある状態で保存してください。');
     }
+    if(!confirm(`GitHubのデータで上書きします。\n\nリモート: レース${remoteRaces.length}件, 馬DB${Object.keys(remoteHorses).length}頭\nローカル: レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭\n\n実行しますか？`))
+    {btn.disabled=false;btn.textContent='📥 GitHubから復元';return}
+    btn.textContent='⏳ 読込中...';
+    RACES=remoteRaces;
+    saveR(RACES);
+    HORSE_STORE=remoteHorses;
+    saveHorseStore(HORSE_STORE);
     HORSE_DB=buildHorseDB();
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
