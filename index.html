@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.4.1 (2026-03-29)</div>
+<div class="hd-ver">ver 1.5.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -2318,8 +2318,52 @@ function renderTrends(){
 // ===== CLOUD SYNC (GitHub API) =====
 const GH_REPO='blacksmith1021-sys/keiba-newspaper';
 const GH_API='https://api.github.com';
-function getGhToken(){const s=loadSettings();return s.ghToken||''}
-function setGhToken(t){const s=loadSettings();s.ghToken=t;saveSettings(s)}
+const GH_TOKEN_IDB_KEY='ghToken';
+
+// トークン: IndexedDB(キャッシュ削除に強い) + localStorage両方に保持
+function getGhToken(){return loadSettings().ghToken||''}
+function setGhToken(t){
+  const s=loadSettings();s.ghToken=t;saveSettings(s);
+  _idbSave(GH_TOKEN_IDB_KEY,t).catch(()=>{});
+}
+async function restoreGhToken(){
+  // localStorageにあればそれを使う
+  const ls=getGhToken();if(ls)return ls;
+  // なければIndexedDBから復元
+  try{
+    const t=await _idbLoad(GH_TOKEN_IDB_KEY);
+    if(t){const s=loadSettings();s.ghToken=t;saveSettings(s);return t}
+  }catch{}
+  return '';
+}
+
+// GitHub自動復元: ローカルデータが空でトークンがあれば自動取得
+async function autoRestoreFromGithub(){
+  const token=await restoreGhToken();
+  if(!token)return false;
+  // ローカルにデータがあれば復元不要
+  const localRaces=RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_'));
+  if(localRaces.length>0&&Object.keys(HORSE_STORE).length>0)return false;
+  // GitHubからデータ取得を試行
+  try{
+    console.log('GitHub自動復元を開始...');
+    const [rFile,hFile]=await Promise.all([
+      ghGet('data/races.json',token),
+      ghGet('data/horse_store.json',token)
+    ]);
+    if(!rFile)return false;
+    const races=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
+    if(races.length<=RACES.length)return false; // リモートの方が少なければ不要
+    RACES=races;saveR(RACES);
+    if(hFile){
+      HORSE_STORE=JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,'')))));
+      saveHorseStore(HORSE_STORE);
+    }
+    HORSE_DB=buildHorseDB();
+    console.log('GitHub自動復元完了: '+RACES.length+'レース, '+Object.keys(HORSE_STORE).length+'頭');
+    return true;
+  }catch(e){console.warn('GitHub自動復元失敗:',e.message);return false}
+}
 function getLastSync(){const s=loadSettings();return s.lastSync||''}
 function setLastSync(t){const s=loadSettings();s.lastSync=t;saveSettings(s)}
 
@@ -2481,10 +2525,18 @@ async function doGhLoad(){
 
 // Init
 (async()=>{
-  // ファイルストレージ自動復元
+  // 1. ファイルストレージ自動復元
   const fsOk=await initFileStorage();
   if(fsOk)console.log('ファイルストレージ接続済み');
-  // snapshotの遡及生成
+  // 2. GitHub自動復元（ローカルが空の場合のみ）
+  const ghRestored=await autoRestoreFromGithub();
+  if(ghRestored){
+    const banner=document.createElement('div');
+    banner.style.cssText='position:fixed;top:0;left:0;right:0;background:var(--grn);color:#fff;text-align:center;padding:10px;font-size:13px;font-weight:700;z-index:9999;';
+    banner.textContent='✅ GitHubからデータを自動復元しました（'+RACES.length+'レース）';
+    document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
+  }
+  // 3. snapshotの遡及生成
   RACES.forEach(r=>{
     if(r.result?.top3?.length>=3&&r.scored?.length>0&&!r.result.analysisSnapshot&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r)){
       try{r.result.analysisSnapshot=buildAnalysisSnapshot(r)}catch(e){}
