@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.4.0 (2026-03-29)</div>
+<div class="hd-ver">ver 1.4.1 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -790,8 +790,8 @@ function genBet(scored,raceInfo){
     ?'レース質不良（'+raceQuality.reasons.join('・')+'）'
     :'自信度★のため見送りを推奨します。';
 
-  // 信頼度に応じた投資額：★★★=500円、★★=300円、★=0円(見送り)
-  const invTable={3:{uma:170,wide:330},2:{uma:100,wide:200},1:{uma:0,wide:0}};
+  // 信頼度に応じた投資額(100円単位)：★★★=500円、★★=300円、★=0円(見送り)
+  const invTable={3:{uma:200,wide:300},2:{uma:100,wide:200},1:{uma:0,wide:0}};
   const invConf=invTable[confLevel];
   const umaAmt=skipRecommended?0:invConf.uma;
   const wideAmt=skipRecommended?0:invConf.wide;
