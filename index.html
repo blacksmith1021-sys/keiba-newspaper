@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.5.1 (2026-03-29)</div>
+<div class="hd-ver">ver 2.0.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -661,8 +661,18 @@ if(h.sex==='牝'&&inf.date){const mo=parseInt((inf.date.split('/')||[])[1]||0);i
 // 総賞金による実力補正
 if(h.prize&&h.prize>0){const ap=hs.filter(x=>x.prize&&x.prize>0).map(x=>x.prize);if(ap.length>=3){const sorted=[...ap].sort((a,b)=>b-a),rank=sorted.indexOf(h.prize),pct=rank/sorted.length;if(pct<=0.2){s+=4;f['賞金']={v:Math.round(h.prize/100)+'百万(上)',c:'g'}}else if(pct<=0.4){s+=2;f['賞金']={v:Math.round(h.prize/100)+'百万',c:'n'}}else if(pct>=0.8&&ap.length>=5){s-=2;f['賞金']={v:Math.round(h.prize/100)+'百万(下)',c:'b'}}}}
 
-// スコア上限を撤廃（0未満のみ防止）
-h.score=Math.min(150,Math.max(0,s));h.f=f});
+// ファクター重み付けによるスコア再計算
+const FW={'騎手':2.0,'前走':1.8,'着差':1.8,'蓄積':1.7,'安定':1.5,'上がり':1.5,'距離':1.0,'回り':0.7,'血統':0.2,'間隔':0};
+h._rawScore=s; // 元スコアをバックアップ
+// g評価のファクターに重みを適用（b評価は元の減点をそのまま維持）
+for(const[fk,fv]of Object.entries(f)){
+  if(fv.c==='g'&&FW[fk]!==undefined&&FW[fk]!==1){
+    // 元の加点を推定して重みで再計算（間隔は除外=0倍）
+    const origPts=fk==='騎手'?8:fk==='前走'?18:fk==='着差'?5:fk==='蓄積'?8:fk==='安定'?6:fk==='上がり'?10:fk==='距離'?10:fk==='回り'?5:fk==='血統'?5:0;
+    if(origPts>0){s+= Math.round(origPts*(FW[fk]-1))} // 差分のみ加算（元の加点は既にsに含む）
+  }
+}
+h.score=Math.max(0,s);h.f=f});
 // 正規化は最高得点を100として相対値
 const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round(h.ns*h.odds/100*100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
 
@@ -741,79 +751,71 @@ function genBet(scored,raceInfo){
   }
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
-  let A=stables[0]?.h,B=stables[1]?.h;
-  const ssA=stables[0]?.ss||0,ssB=stables[1]?.ss||0;
 
-  // 信頼度判定：軸馬のnormalizedスコア(ns)とスコア差で判定
-  const nsA=stables[0]?.h?.ns||0;
-  const nsB=stables[1]?.h?.ns||0;
-  const nsDiff=nsA-nsB;
+  // ===== 改修3: 軸馬選定 — EV最高(ns>=80)を軸(A) =====
+  const axisPool=scored.filter(h=>h.ns>=80&&(!h.odds||h.odds>=3.0)).sort((a,b)=>(b.ev||0)-(a.ev||0));
+  const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
+  let A=axisPool[0]||null;
+  let B=axisPool[1]||(himoPool[0]||null);
+  // C: ヒモ候補（ns50-79）からA,B以外、またはaxis残り
+  let C=himoPool.filter(h=>h!==A&&h!==B)[0]||axisPool.filter(h=>h!==A&&h!==B)[0]||null;
 
+  // ===== 改修4: 見送り基準の数値化 =====
+  const topNs=scored[0]?.ns||0;
+  const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
+  const hasTrackData=!!(raceInfo?.surf&&raceInfo?.cond);
+  const buyOk=topNs>=70&&nsDiff>=5&&hasTrackData&&!poorRace;
+  const skipRecommended=!buyOk;
+
+  // 信頼度（表示用）
+  const axisEv=A?.ev||0;
   let confidence='',confLevel=1;
-  if(nsA>=90&&nsDiff>=10){confidence='★★★ 高';confLevel=3}
-  else if(nsA>=75){confidence='★★ 中';confLevel=2}
+  if(axisEv>=15){confidence='★★★ 高';confLevel=3}
+  else if(axisEv>=10){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
 
-  // 期待値スコア(ev)が高い馬を軸候補として優先（A, Bの入れ替え検討）
-  const evA=stables[0]?.h?.ev||0,evB=stables[1]?.h?.ev||0;
-  if(evB>evA*1.3&&stables[1]){
-    const tmp=stables[0];stables[0]=stables[1];stables[1]=tmp;
-    A=stables[0].h;B=stables[1].h;
-  }
+  const skipReason=!hasTrackData?'コース・馬場データ未入力':topNs<70?'最高スコア不足('+topNs+')':nsDiff<5?'上位スコア差不足(差'+nsDiff+')':poorRace?'レース質不良（'+raceQuality.reasons.join('・')+'）':'条件未達';
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
       fukushoHorse:null,totalInv:0,wideAmount:0,fukAmount:0,raceQuality,
-      patName:'候補不足',patReason:'',warning:'候補馬不足',skipRecommended:true,alternatives:[]};
+      patName:'候補不足',patReason:'軸候補(ns80以上)が不足',warning:'候補馬不足',skipRecommended:true,alternatives:[]};
   }
 
-  // ===== ② ワイドC選定：1番人気の扱いをstableScore順位×オッズ乖離で判断 =====
-  // favScoreRankはstables（stableScore順）での順位を使う（scored順位ではない）
-  const favStableRank=stables.findIndex(x=>x.h===favHorse); // -1なら候補外
-  // 過剰人気：1番人気がstableScore上で3位以下 OR useEligibleに含まれていない（3倍未満除外）
+  const favStableRank=stables.findIndex(x=>x.h===favHorse);
   const favInEligible=favStableRank>=0;
   const favIsOverrated=!favInEligible||(favStableRank>=2);
   const favIsLegit=favInEligible&&favStableRank<=1;
 
-  // widePool：過剰人気ならfavを除外、実力人気なら含める
-  // ※ AまたはBがfavの場合は既にC候補から外れるため問題なし
-  const widePool=stables.filter(x=>x.h!==A&&x.h!==B&&(favIsOverrated?x.h!==favHorse:true));
-  const widePoolFallback=stables.filter(x=>x.h!==A&&x.h!==B);
-  const C=(widePool.length>0?widePool:widePoolFallback)[0]?.h||null;
-
   const estU=eU(A,B);
   const estW=C?eW(B,C):0;
 
-  // 見送り判断：★低 OR レース質不良
-  const skipRecommended=confLevel===1||poorRace;
-  const skipReason=poorRace
-    ?'レース質不良（'+raceQuality.reasons.join('・')+'）'
-    :'自信度★のため見送りを推奨します。';
+  // ===== 改修6: 投資額を期待値ベースに(100円単位) =====
+  let umaAmt=0,wideAmt=0;
+  if(!skipRecommended){
+    if(axisEv>=15){umaAmt=200;wideAmt=300}       // 500円
+    else if(axisEv>=10){umaAmt=100;wideAmt=200}   // 300円
+    // axisEv<10 は見送り(改修4のbuyOkがfalseになるケースと重複しうるが安全弁)
+  }
 
-  // 信頼度に応じた投資額(100円単位)：★★★=500円、★★=300円、★=0円(見送り)
-  const invTable={3:{uma:200,wide:300},2:{uma:100,wide:200},1:{uma:0,wide:0}};
-  const invConf=invTable[confLevel];
-  const umaAmt=skipRecommended?0:invConf.uma;
-  const wideAmt=skipRecommended?0:invConf.wide;
-
-  const tickets=skipRecommended?[]:[
+  const tickets=skipRecommended||umaAmt===0?[]:[
     {type:'馬連',desc:A.num+'─'+B.num,amount:umaAmt,horses:[A,B],est:estU,
      reason:'添え：'+A.num+'番─'+B.num+'番が1・2着で的中'},
     ...(C?[{type:'ワイド',desc:B.num+'─'+C.num,amount:wideAmt,horses:[B,C],est:estW,
      reason:'主軸：'+B.num+'番─'+C.num+'番'+(favIsOverrated?'（1番人気=過剰人気のため除外）':'（1番人気=実力馬のため含む可能性あり）')}]:[])
   ];
-  const totalInv=skipRecommended?0:umaAmt+(C?wideAmt:0);
+  const totalInv=(skipRecommended||umaAmt===0)?0:umaAmt+(C?wideAmt:0);
 
   // 戦略説明
   const favNote=favIsOverrated
-    ?'1番人気('+favOdds+'倍)は実力スコア'+(favInEligible?favStableRank+1+'位':'圏外')+'で過剰人気→ワイドから除外'
-    :'1番人気('+favOdds+'倍)は実力スコア'+(favStableRank+1)+'位で実力通り→ワイドに含める';
-  const patName=skipRecommended?'見送り推奨':'ワイド主軸（B─C）＋馬連添え（A─B）';
-  const patReason=skipRecommended
+    ?'1番人気('+favOdds+'倍)は実力スコア'+(favInEligible?favStableRank+1+'位':'圏外')+'で過剰人気→除外'
+    :'1番人気('+favOdds+'倍)は実力スコア'+(favStableRank+1)+'位で実力通り';
+  const patName=(skipRecommended||umaAmt===0)?'見送り推奨':'ワイド主軸（B─C）＋馬連添え（A─B）';
+  const patReason=(skipRecommended||umaAmt===0)
     ?skipReason
-    :'ワイド200円でB─Cの2・3着を主力に回収。馬連100円はA─Bの1-2着独占時のボーナス。【'+favNote+'】';
+    :'軸A=EV'+axisEv+'(ns'+A.ns+')。投資'+totalInv+'円(EV'+(axisEv>=15?'15↑→500円':'10↑→300円')+')。【'+favNote+'】';
 
-  const bestObj={type:'馬連',horses:[A,B],est:estU,ev:0,prob:0,
+  const bestObj={type:'馬連',horses:[A,B],est:estU,ev:axisEv,prob:0,
     why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
 
   // レース質の警告文
