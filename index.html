@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.0.2 (2026-03-29)</div>
+<div class="hd-ver">ver 2.1.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -1033,7 +1033,11 @@ function checkAllTickets(r){
 // ===== 的中判定・回収計算ヘルパー =====
 function getHitInfo(r){
   const res=r.result,bt=r.bet;
-  if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null};
+  if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null,skip:false};
+  // 見送り推奨レースは投資0・回収0・的中判定なし
+  if(bt?.skipRecommended||bt?.totalInv===0){
+    return{wideHit:false,wideTicketHit:false,fukHit:false,anyHit:false,label:'見送り',ret:0,inv:0,tickets:null,skip:true};
+  }
   
   const t3=res.top3.map(n=>+n);
   let betNums=[];
@@ -1098,7 +1102,7 @@ function getHitInfo(r){
   // 全券種照合
   const tickets=checkAllTickets(r);
   
-  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,tickets};
+  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,tickets,skip:false};
 }
 
 // ===== LOSS ANALYSIS =====
@@ -1519,8 +1523,8 @@ function renderList(){
   const latestDate=dates[0]||'';
   const pastDates=dates.slice(1);
   
-  // 通算収支（2026/3/15以前を除外）
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  // 通算収支（見送り・取込を除外）
+  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r)&&!getHitInfo(r).skip);
   const hits=done.filter(r=>getHitInfo(r).wideHit).length;
   const fukHits=done.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
   const totalBet=done.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
@@ -1554,7 +1558,7 @@ function renderList(){
   showDates.forEach(dt=>{
     if(!dt||!groups[dt])return;
     const dayRaces=groups[dt];
-    const dayDone=dayRaces.filter(r=>r.result?.top3?.length>=3&&!isPastOnly(r));
+    const dayDone=dayRaces.filter(r=>r.result?.top3?.length>=3&&!isPastOnly(r)&&!getHitInfo(r).skip);
     const dayHits=dayDone.filter(r=>getHitInfo(r).wideHit).length;
     const dayFuk=dayDone.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
     const dayInv=dayDone.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
@@ -1588,21 +1592,23 @@ function renderList(){
     dayRaces.forEach(r=>{
       const hasR=r.result?.top3?.length>=3;
       const hi=getHitInfo(r);
-      const cls=hasR?(hi.anyHit?'hit':'miss'):'pend';
-      const betInfo=r.bet?.best?r.bet.best.type+' '+r.bet.best.desc:'';
+      const isSkip=hi.skip;
+      const cls=hasR?(isSkip?'pend':hi.anyHit?'hit':'miss'):'pend';
+      const betInfo=(!isSkip&&r.bet?.best)?r.bet.best.type+' '+r.bet.best.desc:'';
       const inv=hi.inv||0;
       let profitStr='';
-      if(hasR){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
+      if(hasR&&!isSkip){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
       const venue=(r.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
       const pastLabel=isPastOnly(r)?`<span style="font-size:10px;color:var(--gld);font-weight:700;background:rgba(184,134,11,.12);padding:1px 6px;border-radius:3px;margin-left:5px">取込</span>`:'';
-      
+
       h+=`<div class="card ${cls}" onclick="CUR='${r.id}';showView('detail')">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:14px"><span style="font-weight:900">${venue}</span> ${r.info.raceNum||'?'}R${pastLabel}</div>
           <div style="font-size:11px;color:var(--dim);margin-top:1px">${r.info.dist||''}m ${r.info.surf||''}${r.info.cond?' / '+r.info.cond:''}${(!r.info.surf||!r.info.cond)?'<span style="color:var(--red);font-weight:700"> ⚠馬場未入力</span>':''}${betInfo?' ／ '+betInfo:''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          ${hasR?`<div style="font-weight:900;font-size:12px;color:${hi.anyHit?'var(--grn)':'var(--red)'}">${hi.label==='的中'?'✓ 馬連':hi.label==='ワイド的中'?'◎ ワイド':hi.label==='複勝的中'?'△ 複勝':'✗'}</div>
+          ${isSkip?`<div style="font-size:11px;color:var(--lt);font-weight:700">見送り</div>`
+          :hasR?`<div style="font-weight:900;font-size:12px;color:${hi.anyHit?'var(--grn)':'var(--red)'}">${hi.label==='的中'?'✓ 馬連':hi.label==='ワイド的中'?'◎ ワイド':hi.label==='複勝的中'?'△ 複勝':'✗'}</div>
           <div style="font-size:11px;font-weight:700;color:${hi.ret>=inv?'var(--grn)':'var(--red)'}">${profitStr}</div>`
           :`<div style="font-size:11px;color:var(--gld);font-weight:700">未入力</div>`}
         </div>
@@ -1683,15 +1689,15 @@ function downloadCSV(){
       betType,
       betNums,
       betNames,
-      hasR?hi.label:'未入力',
+      hi.skip?'見送り':hasR?hi.label:'未入力',
       hasR?t1+'番 '+nameOf(t1):'',
       hasR?t2+'番 '+nameOf(t2):'',
       hasR?t3+'番 '+nameOf(t3):'',
-      hasR?payout:'',
-      hasR?ret:'',
-      inv,
-      hasR?profit:'',
-      hasR&&inv>0?Math.round(ret/inv*100)+'%':'',
+      hasR&&!hi.skip?payout:'',
+      hi.skip?'':hasR?ret:'',
+      hi.skip?'':inv,
+      hi.skip?'':hasR?profit:'',
+      hi.skip?'':hasR&&inv>0?Math.round(ret/inv*100)+'%':'',
       r.bet?.confidence||'',
       r.bet?.best?.ev||r.scored?.[0]?.ev||'',
       r.scored?.[0]?.num||'',r.scored?.[0]?.ns||'',r.scored?.[0]?.ev||'',
@@ -1699,7 +1705,7 @@ function downloadCSV(){
     ]);
   });
   // 合計行
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_'));
+  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!getHitInfo(r).skip);
   const totalBet=done.reduce((s,r)=>s+getHitInfo(r).inv,0);
   const totalRet=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   rows.push([]);
@@ -1858,15 +1864,20 @@ function renderDetail(id){
   if(b.excluded?.length>0)h+=`<div class="exc">除外（3倍未満）：${b.excluded.map(h=>h.num+'番 '+h.name+'（'+((h.odds||'?'))+'倍）').join('、')}</div>`;
   if(b.excluded?.length===0&&!b.fav)h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:6px">除外なし（全馬3倍以上）</div>`;
   if(b.skipRecommended){
-    const isRaceQuality=b.raceQuality?.score<=-40;
-    h+=`<div style="background:rgba(196,30,58,.06);border:1px solid var(--red);padding:10px 12px;margin-bottom:8px;border-radius:4px">
-      <div style="font-size:13px;color:var(--red);font-weight:700;margin-bottom:4px">⚠ 見送り推奨${isRaceQuality?'（レース質不良）':'（自信度★）'}</div>
-      ${isRaceQuality?`<div style="font-size:11px;color:var(--dim);line-height:1.7">${(b.raceQuality?.reasons||[]).map(r=>'・'+r).join('<br>')}</div>`:''}
-    </div>`;
+    const isTrackMissing=b.patReason?.includes('馬場データ未入力');
+    if(!isTrackMissing){
+      const isRaceQuality=b.raceQuality?.score<=-40;
+      h+=`<div style="background:rgba(196,30,58,.06);border:1px solid var(--red);padding:10px 12px;margin-bottom:8px;border-radius:4px">
+        <div style="font-size:13px;color:var(--red);font-weight:700;margin-bottom:4px">⚠ 見送り推奨</div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.7">${b.patReason||''}</div>
+      </div>`;
+    }
   }
-  // 券種選択理由
-  if(b.patName)h+=`<div style="font-size:12px;color:var(--dim);margin-bottom:6px">戦略：${b.patName}</div>`;
-  if(b.patReason)h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px;padding:6px 10px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px">${b.patReason}</div>`;
+  // 券種選択理由（見送りでない場合のみ）
+  if(!b.skipRecommended){
+    if(b.patName)h+=`<div style="font-size:12px;color:var(--dim);margin-bottom:6px">戦略：${b.patName}</div>`;
+    if(b.patReason)h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px;padding:6px 10px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px">${b.patReason}</div>`;
+  }
   // 馬券カード（複数対応）
   if(b.tickets?.length>0){
     const colorMap={'ワイド':['var(--grn)','rgba(45,106,48,.06)','rgba(45,106,48,.12)'],
