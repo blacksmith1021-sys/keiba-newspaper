@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 1.3.0 (2026-03-28)</div>
+<div class="hd-ver">ver 1.3.1 (2026-03-28)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -2370,16 +2370,14 @@ async function doGhSave(){
   btn.disabled=true;btn.textContent='⏳ 保存中...';
   showSyncStatus('GitHubにアップロード中...','info');
   try{
-    // 既存ファイルのSHAを取得（更新に必要）
+    // 既存ファイルのSHAを取得（並列OK）
     const [rExist,hExist]=await Promise.all([
       ghGet('data/races.json',token),
       ghGet('data/horse_store.json',token)
     ]);
-    // アップロード
-    await Promise.all([
-      ghPut('data/races.json',JSON.stringify(RACES),token,rExist?.sha),
-      ghPut('data/horse_store.json',JSON.stringify(HORSE_STORE),token,hExist?.sha)
-    ]);
+    // アップロード（逐次実行 — 並列だと409 Conflictになる）
+    await ghPut('data/races.json',JSON.stringify(RACES),token,rExist?.sha);
+    await ghPut('data/horse_store.json',JSON.stringify(HORSE_STORE),token,hExist?.sha);
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
     showSyncStatus(`✅ 保存完了！ レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭<br><span class="sync-time">保存日時: ${now}</span>`,'ok');
