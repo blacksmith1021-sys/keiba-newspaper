@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.1.1 (2026-03-29)</div>
+<div class="hd-ver">ver 2.2.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -667,7 +667,7 @@ if(h.prize&&h.prize>0){const ap=hs.filter(x=>x.prize&&x.prize>0).map(x=>x.prize)
 
 h.score=Math.max(0,s);h.f=f});
 // 正規化は最高得点を100として相対値
-const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round(h.ns*h.odds/100*100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
+const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round((h.ns/100)*h.odds*100-100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
 
 // ===== BET (v17: ワイド主軸200円+馬連添え100円=300円、レース質判定付き) =====
 function genBet(scored,raceInfo){
@@ -745,32 +745,32 @@ function genBet(scored,raceInfo){
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
 
-  // ===== 改修3: 軸馬選定 — EV最高(ns>=80)を軸(A) =====
-  const axisPool=scored.filter(h=>h.ns>=80&&(!h.odds||h.odds>=3.0)).sort((a,b)=>(b.ev||0)-(a.ev||0));
+  // ===== 軸馬選定: ns>=80 かつ 人気3番手以内、スコア順 =====
+  const axisPool=scored.filter(h=>h.ns>=80&&h.pop&&h.pop<=3).sort((a,b)=>b.ns-a.ns);
   const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
   let A=axisPool[0]||null;
   let B=axisPool[1]||(himoPool[0]||null);
-  // C: ヒモ候補（ns50-79）からA,B以外、またはaxis残り
   let C=himoPool.filter(h=>h!==A&&h!==B)[0]||axisPool.filter(h=>h!==A&&h!==B)[0]||null;
 
-  // ===== 見送り基準（2条件のみ） =====
+  // ===== 見送り基準: topNs<70 / nsDiff<5 / 軸馬なし =====
   const topNs=scored[0]?.ns||0;
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
-  const skipRecommended=topNs<70||nsDiff<5;
+  const noAxis=!A;
+  const skipRecommended=topNs<70||nsDiff<5||noAxis;
 
   // 信頼度（表示用）
   const axisEv=A?.ev||0;
   let confidence='',confLevel=1;
-  if(axisEv>=15){confidence='★★★ 高';confLevel=3}
-  else if(axisEv>=10){confidence='★★ 中';confLevel=2}
+  if(axisEv>=1.5){confidence='★★★ 高';confLevel=3}
+  else if(axisEv>=0.5){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
 
-  const skipReason=topNs<70?'最高スコア不足('+topNs+')':'上位スコア差不足(差'+nsDiff+')';
+  const skipReason=noAxis?'軸馬候補なし(ns80以上かつ人気3番手以内が0頭)':topNs<70?'最高スコア不足('+topNs+')':'上位スコア差不足(差'+nsDiff+')';
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
       fukushoHorse:null,totalInv:0,wideAmount:0,fukAmount:0,raceQuality,
-      patName:'候補不足',patReason:'軸候補(ns80以上)が不足',warning:'候補馬不足',skipRecommended:true,alternatives:[]};
+      patName:'候補不足',patReason:skipReason,warning:'候補馬不足',skipRecommended:true,alternatives:[]};
   }
 
   const favStableRank=stables.findIndex(x=>x.h===favHorse);
@@ -781,12 +781,12 @@ function genBet(scored,raceInfo){
   const estU=eU(A,B);
   const estW=C?eW(B,C):0;
 
-  // ===== 改修6: 投資額を期待値ベースに(100円単位) =====
+  // 投資額を期待値ベースに(100円単位) EV=(ns/100)*odds-1
   let umaAmt=0,wideAmt=0;
   if(!skipRecommended){
-    if(axisEv>=15){umaAmt=200;wideAmt=300}       // 500円
-    else if(axisEv>=10){umaAmt=100;wideAmt=200}   // 300円
-    // axisEv<10 は見送り(改修4のbuyOkがfalseになるケースと重複しうるが安全弁)
+    if(axisEv>=1.5){umaAmt=200;wideAmt=300}       // EV1.5以上→500円
+    else if(axisEv>=0.5){umaAmt=100;wideAmt=200}   // EV0.5以上→300円
+    else{umaAmt=100;wideAmt=200}                    // EV0.5未満でも購入(見送りでなければ)→300円
   }
 
   const tickets=skipRecommended||umaAmt===0?[]:[
@@ -804,7 +804,7 @@ function genBet(scored,raceInfo){
   const patName=(skipRecommended||umaAmt===0)?'見送り推奨':'ワイド主軸（B─C）＋馬連添え（A─B）';
   const patReason=(skipRecommended||umaAmt===0)
     ?skipReason
-    :'軸A=EV'+axisEv+'(ns'+A.ns+')。投資'+totalInv+'円(EV'+(axisEv>=15?'15↑→500円':'10↑→300円')+')。【'+favNote+'】';
+    :'軸A=EV'+axisEv+'(ns'+A.ns+'/'+A.pop+'番人気)。投資'+totalInv+'円。【'+favNote+'】';
 
   const bestObj={type:'馬連',horses:[A,B],est:estU,ev:axisEv,prob:0,
     why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
@@ -1491,7 +1491,7 @@ function doAnalyze(){
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.1.1'};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.2.0'};
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
   CUR=id;showView('detail');
@@ -1522,19 +1522,38 @@ function renderList(){
   const pastDates=dates.slice(1);
   
   // 通算収支（見送り・取込を除外）
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r)&&!getHitInfo(r).skip);
+  const allAnalyzed=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  const skipped=allAnalyzed.filter(r=>getHitInfo(r).skip).length;
+  const done=allAnalyzed.filter(r=>!getHitInfo(r).skip);
   const hits=done.filter(r=>getHitInfo(r).wideHit).length;
   const fukHits=done.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
   const totalBet=done.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
   const totalReturn=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   const profit=totalReturn-totalBet;
-  
+
+  // 軸馬的中率（A馬が3着以内に入った率）
+  let axisIn3=0,axisTotal=0;
+  done.forEach(r=>{
+    if(!r.bet?.best?.horses?.[0]||!r.result?.top3)return;
+    axisTotal++;
+    const anum=r.bet.best.horses[0].num;
+    if(r.result.top3.map(Number).includes(anum))axisIn3++;
+  });
+
+  // スコア帯別的中率
+  const scoreBands=[{label:'90-100',min:90,max:100},{label:'80-89',min:80,max:89},{label:'70-79',min:70,max:79}];
+  const bandStats=scoreBands.map(b=>{
+    const rs=done.filter(r=>r.scored?.[0]?.ns>=b.min&&r.scored?.[0]?.ns<=b.max);
+    const h2=rs.filter(r=>getHitInfo(r).anyHit).length;
+    return{label:b.label,total:rs.length,hit:h2,rate:rs.length>0?Math.round(h2/rs.length*100):0};
+  });
+
   h+=`<div class="pnl" style="padding:12px 14px">
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="font-weight:700;font-size:13px">📊 通算収支</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px">
-        <span>分析${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}R</span>
-        ${RACES.filter(r=>r.id?.startsWith('bulk_')||r.id?.startsWith('csv_')).length>0?`<span style="color:var(--dim)">取込${RACES.filter(r=>r.id?.startsWith('bulk_')).length}R</span>`:''}
+        <span>購入 <b>${done.length}</b>R</span>
+        <span style="color:var(--lt)">見送り <b>${skipped}</b>R</span>
         <span style="color:var(--grn)">的中 <b>${hits}</b></span>
         ${fukHits>0?`<span style="color:var(--blu)">複勝的中 <b>${fukHits}</b></span>`:''}
         <span style="color:var(--red)">不的中 <b>${done.length-hits-fukHits}</b></span>
@@ -1546,6 +1565,10 @@ function renderList(){
       <div style="font-size:12px;color:var(--dim)">回収 <b>${totalReturn.toLocaleString()}円</b></div>
       <div style="font-size:18px;font-weight:900;color:${profit>=0?'var(--grn)':'var(--red)'}">${profit>=0?'+':''}${profit.toLocaleString()}円</div>
       <div style="font-size:12px;color:${totalReturn>=totalBet?'var(--grn)':'var(--red)'}">回収率 <b>${totalBet>0?Math.round(totalReturn/totalBet*100):0}%</b></div>
+    </div>`;
+    h+=`<div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;font-size:11px;color:var(--dim)">
+      <span>軸馬3着内率 <b>${axisTotal>0?Math.round(axisIn3/axisTotal*100):0}%</b>(${axisIn3}/${axisTotal})</span>
+      ${bandStats.filter(b=>b.total>0).map(b=>`<span>ns${b.label}: <b>${b.rate}%</b>(${b.hit}/${b.total})</span>`).join('')}
     </div>`;
   }
   h+=`</div>`;
@@ -1839,11 +1862,24 @@ function renderDetail(id){
 <tr style="background:var(--p3)"><td style="padding:4px 6px;font-weight:700;border:1px solid var(--bdr)">昇級/降級</td><td style="padding:4px 6px;border:1px solid var(--bdr)">前走クラスとの比較。昇級は-5点、降級は+5点。</td></tr>
 </table>
 <div style="margin-top:8px;font-weight:700;color:var(--gld);margin-bottom:4px">タグの色</div>
-<div style="display:flex;gap:6px;flex-wrap:wrap">
-<span class="tag tag-g">緑＝プラス評価</span>
-<span class="tag tag-n">黄＝普通・中立</span>
-<span class="tag tag-b">赤＝マイナス評価</span>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+<span class="tag tag-g">緑(g)＝プラス評価</span>
+<span class="tag tag-n">黄(n)＝普通・中立</span>
+<span class="tag tag-b">赤(b)＝マイナス評価</span>
 </div>
+<div style="font-weight:700;color:var(--red);margin-bottom:4px">g / n / b の判定基準</div>
+<table style="width:100%;font-size:11px;border-collapse:collapse">
+<tr style="background:var(--p3)"><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr);width:50px">前走</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:1〜3着 <b>n</b>:4〜6着 <b style="color:var(--red)">b</b>:7着以下</td></tr>
+<tr><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">上がり</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:出走馬中の上位20% <b>n</b>:中間 <b style="color:var(--red)">b</b>:下位30%</td></tr>
+<tr style="background:var(--p3)"><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">距離</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:同距離±200mで5着以内経験 <b>n</b>:経験あり <b style="color:var(--red)">b</b>:初距離</td></tr>
+<tr><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">騎手</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:リーディング上位(★/◎) <b>n</b>:中堅(○) <b style="color:var(--red)">b</b>:格下乗替</td></tr>
+<tr style="background:var(--p3)"><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">安定</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:直近3走で5着以内2回以上 <b>n</b>:1回 <b style="color:var(--red)">b</b>:0回</td></tr>
+<tr><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">着差</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:0.3秒以内 <b>n</b>:0.3〜1.5秒 <b style="color:var(--red)">b</b>:1.5秒超</td></tr>
+<tr style="background:var(--p3)"><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">蓄積</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:同条件で3着以内経験あり <b>n</b>:他条件のみ <b style="color:var(--red)">b</b>:平均着順低い</td></tr>
+<tr><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">回り</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:同回りで3着以内+平均良好 <b>n</b>:経験あり <b style="color:var(--red)">b</b>:苦手回り</td></tr>
+<tr style="background:var(--p3)"><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">血統</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:芝/ダート適性◎の種牡馬 <b>n</b>:○ <b style="color:var(--red)">b</b>:△×(不向き)</td></tr>
+<tr><td style="padding:3px 6px;font-weight:700;border:1px solid var(--bdr)">馬場</td><td style="padding:3px 6px;border:1px solid var(--bdr)"><b style="color:var(--grn)">g</b>:重/稍重で3着以内経験 <b>n</b>:5着以内 <b style="color:var(--red)">b</b>:未経験or苦手</td></tr>
+</table>
 </div>`;
   const marks=['◎','○','▲','△','×'];
   s.slice(0,5).forEach((x,i)=>{
@@ -2560,7 +2596,7 @@ async function doGhLoad(){
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
-  const SCORE_VER='v2.1.1';
+  const SCORE_VER='v2.2.0';
   HORSE_DB=buildHorseDB();
   let rescored=0;
   RACES.forEach(r=>{
