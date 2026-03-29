@@ -446,63 +446,8 @@ h.prev.push(pr)}
 // 日付の新しい順にソート（前走が[0]になるように）
 h.prev.sort((a,b)=>b.dateKey-a.dateKey);
 if(h.name&&h.num)r.horses.push(h)}
-// === オッズデータ解析（JRAオッズページ形式: 軸馬番号行＋相手馬番号\tオッズ行） ===
-r._marketOdds={umaren:{},wide:{}};
-// デバッグ: テキスト内のマーカー検索
-const umarenIdx=t.indexOf('馬連オッズ');
-const wideIdx=t.indexOf('ワイドオッズ');
-console.log('[ODDS DEBUG] テキスト長:',t.length,'馬連オッズ位置:',umarenIdx,'ワイドオッズ位置:',wideIdx);
-if(umarenIdx>=0)console.log('[ODDS DEBUG] 馬連マーカー周辺:',JSON.stringify(t.substring(umarenIdx,umarenIdx+50)));
-if(wideIdx>=0)console.log('[ODDS DEBUG] ワイドマーカー周辺:',JSON.stringify(t.substring(wideIdx,wideIdx+50)));
-// マーカーが見つからない場合、類似文字列を検索
-if(umarenIdx<0){
-  const uTest=t.match(/馬連[^\n]{0,20}/);
-  console.log('[ODDS DEBUG] 馬連を含む行:',uTest?uTest[0]:'なし');
-}
-if(wideIdx<0){
-  const wTest=t.match(/ワイド[^\n]{0,20}/);
-  console.log('[ODDS DEBUG] ワイドを含む行:',wTest?wTest[0]:'なし');
-}
-function parseBlockOdds(block,isWide,label){
-  const lines=block.split('\n');
-  let axis=0;const result={};let parsed=0;
-  for(let i=0;i<lines.length;i++){
-    const raw=lines[i];
-    const line=raw.replace(/[\t ]+/g,' ').trim();
-    if(!line)continue;
-    // 軸馬番号行: 数字1〜2桁のみの行
-    if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
-    if(!axis)continue;
-    if(isWide){
-      // ワイド: "相手番号 オッズ下限 - オッズ上限" → 下限を使用
-      const mw=line.match(/^(\d{1,2})\s+([\d,.]+)\s*[-ー－~〜]\s*([\d,.]+)/);
-      if(mw){const partner=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
-        const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=lo;parsed++;continue}
-    }
-    // 馬連 or ワイド単一値: "相手番号 オッズ"
-    const mu=line.match(/^(\d{1,2})\s+([\d,.]+)$/);
-    if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
-      if(v>=1.0){// オッズとして妥当な値のみ
-        const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=v;parsed++}
-    }
-  }
-  console.log('[ODDS DEBUG]',label,'パース結果:',parsed,'件',JSON.stringify(Object.entries(result).slice(0,5)));
-  return result;
-}
-if(umarenIdx>=0){
-  const uEnd=wideIdx>=0?wideIdx:t.length;
-  r._marketOdds.umaren=parseBlockOdds(t.substring(umarenIdx,uEnd),false,'馬連');
-}
-if(wideIdx>=0){
-  r._marketOdds.wide=parseBlockOdds(t.substring(wideIdx),true,'ワイド');
-}
-// 最終デバッグ
-const uCnt=Object.keys(r._marketOdds.umaren).length;
-const wCnt=Object.keys(r._marketOdds.wide).length;
-console.log('[ODDS DEBUG] 最終結果: 馬連'+uCnt+'組, ワイド'+wCnt+'組');
-if(r._marketOdds.umaren['1-3'])console.log('[ODDS DEBUG] 馬連1-3:',r._marketOdds.umaren['1-3']);
+// === オッズデータは券種別テキストエリアから取得（doAnalyze側で処理） ===
+r._marketOdds={tansho:{},wakuren:{},umaren:{},wide:{},umatan:{},sanrenpuku:{},sanrentan:{}};
 return r}
 
 // ===== SCORING =====
@@ -846,25 +791,31 @@ function genBet(scored,raceInfo,marketOdds){
   const estW=C?eW(B,C):0;
 
   // ===== 全券種自動選択: 最大3点・300円 =====
-  const mktOdds=marketOdds||{umaren:{},wide:{}};
-  const hasMarket=Object.keys(mktOdds.umaren).length>0||Object.keys(mktOdds.wide).length>0;
+  const mktOdds=marketOdds||{tansho:{},wakuren:{},umaren:{},wide:{},umatan:{},sanrenpuku:{},sanrentan:{}};
+  const hasMarket=Object.values(mktOdds).some(v=>v&&Object.keys(v).length>0);
 
-  // 実際のオッズを取得するヘルパー
+  // 実際のオッズを取得（入力された券種のみ。未入力券種はnullを返す）
   function getActualOdds(type,horses){
+    if(type==='単勝'){const k=String(horses[0]?.num);return mktOdds.tansho?.[k]!=null?mktOdds.tansho[k]:null;}
     const nums=horses.map(x=>x.num).sort((a,b)=>a-b);
     const key=nums.join('-');
-    if(type==='馬連'&&mktOdds.umaren?.[key]!=null)return mktOdds.umaren[key];
-    if(type==='ワイド'&&mktOdds.wide?.[key]!=null)return mktOdds.wide[key];
-    if(type==='単勝')return horses[0]?.odds||null;
-    // 馬単・3連複は馬連/ワイドオッズから推定（JRAページに含まれない場合）
-    if(type==='馬単'&&mktOdds.umaren?.[key]!=null)return Math.round(mktOdds.umaren[key]*1.8*10)/10;
-    if(type==='3連複'){
-      // 3頭のペアワイドオッズの積から推定
-      const n=horses.map(x=>x.num).sort((a,b)=>a-b);
-      const w12=mktOdds.wide?.[n[0]+'-'+n[1]],w13=mktOdds.wide?.[n[0]+'-'+n[2]],w23=mktOdds.wide?.[n[1]+'-'+n[2]];
-      if(w12&&w13&&w23)return Math.round(Math.cbrt(w12*w13*w23)*3*10)/10;
+    if(type==='馬連')return mktOdds.umaren?.[key]!=null?mktOdds.umaren[key]:null;
+    if(type==='ワイド')return mktOdds.wide?.[key]!=null?mktOdds.wide[key]:null;
+    if(type==='馬単'){// 馬単は順番付き: 軸→相手
+      const oKey=horses[0].num+'-'+horses[1].num;
+      return mktOdds.umatan?.[oKey]!=null?mktOdds.umatan[oKey]:null;
+    }
+    if(type==='3連複')return mktOdds.sanrenpuku?.[key]!=null?mktOdds.sanrenpuku[key]:null;
+    if(type==='3連単'){// 3連単は順番付き
+      const oKey=horses.map(x=>x.num).join('-');
+      return mktOdds.sanrentan?.[oKey]!=null?mktOdds.sanrentan[oKey]:null;
     }
     return null;
+  }
+  // その券種のオッズが入力されているか
+  function hasOddsFor(type){
+    const map={'単勝':'tansho','馬連':'umaren','ワイド':'wide','馬単':'umatan','3連複':'sanrenpuku','3連単':'sanrentan'};
+    const k=map[type];return k&&mktOdds[k]&&Object.keys(mktOdds[k]).length>0;
   }
 
   // レース質による券種傾向判定
@@ -877,18 +828,21 @@ function genBet(scored,raceInfo,marketOdds){
   let tickets=[];
   if(!skipRecommended){
     if(hasMarket){
-      // ===== オッズあり: 全券種から最適選択 =====
+      // ===== オッズあり: 全券種から最適選択（入力された券種のみ判定） =====
       const allCands=[]; // {priority,ticket}
 
       // ① 単勝: 軸馬オッズ10倍以上 → 最優先
-      if(A.odds&&A.odds>=10){
-        allCands.push({priority:1,ticket:{type:'単勝',desc:String(A.num),amount:100,horses:[A],
-          actualOdds:A.odds,grade:'◎',gradeLabel:'軸馬・高配当',
-          reason:A.num+'番が1着で的中'}});
+      if(hasOddsFor('単勝')){
+        const actual=getActualOdds('単勝',[A]);
+        if(actual!=null&&actual>=10){
+          allCands.push({priority:1,ticket:{type:'単勝',desc:String(A.num),amount:100,horses:[A],
+            actualOdds:actual,grade:'◎',gradeLabel:'軸馬・高配当',
+            reason:A.num+'番が1着で的中'}});
+        }
       }
 
       // ② 馬単: 軸馬ns95以上・人気1〜2番手、オッズ15倍以上
-      if(isAxisDominant){
+      if(hasOddsFor('馬単')&&isAxisDominant){
         [B,C,...himoPool.filter(h=>h!==A&&h!==B&&h!==C)].filter(Boolean).forEach(p=>{
           const actual=getActualOdds('馬単',[A,p]);
           if(actual!=null&&actual>=15){
@@ -900,7 +854,7 @@ function genBet(scored,raceInfo,marketOdds){
       }
 
       // ③ 馬連: スコア上位馬絡み、オッズ10倍以上
-      if(!isDanzenFav){
+      if(hasOddsFor('馬連')&&!isDanzenFav){
         const uPartners=[B,C,...himoPool.filter(h=>h!==A&&h!==B&&h!==C)].filter(Boolean);
         uPartners.forEach(p=>{
           const actual=getActualOdds('馬連',[A,p]);
@@ -913,7 +867,7 @@ function genBet(scored,raceInfo,marketOdds){
       }
 
       // ④ 3連複: スコア上位3頭、オッズ20倍以上
-      if(top3.length>=3&&top3[2].ns>=50){
+      if(hasOddsFor('3連複')&&top3.length>=3&&top3[2].ns>=50){
         const actual=getActualOdds('3連複',top3);
         if(actual!=null&&actual>=20){
           allCands.push({priority:isMixedRace?2.5:4,ticket:{type:'3連複',
@@ -924,8 +878,22 @@ function genBet(scored,raceInfo,marketOdds){
         }
       }
 
+      // ④b 3連単: 軸馬1着、上位2頭が2・3着、オッズ50倍以上
+      if(hasOddsFor('3連単')&&isAxisDominant&&top3.length>=3&&top3[2].ns>=50){
+        const others=top3.filter(h=>h!==A).slice(0,2);
+        if(others.length>=2){
+          const actual=getActualOdds('3連単',[A,...others]);
+          if(actual!=null&&actual>=50){
+            allCands.push({priority:isMixedRace?2.5:4,ticket:{type:'3連単',
+              desc:A.num+'→'+others.map(h=>h.num).join('→'),amount:100,horses:[A,...others],
+              actualOdds:actual,grade:'◎',gradeLabel:'軸1着・超高配当',
+              reason:A.num+'番1着→'+others.map(h=>h.num).join('・')+'番が2・3着で的中'}});
+          }
+        }
+      }
+
       // ⑤ ワイド: スコア上位馬絡み、オッズ3倍以上（補完用）
-      if(!isDanzenFav){
+      if(hasOddsFor('ワイド')&&!isDanzenFav){
         for(let i=0;i<highPool.length&&i<4;i++){
           for(let j=i+1;j<highPool.length&&j<4;j++){
             const actual=getActualOdds('ワイド',[highPool[i],highPool[j]]);
@@ -943,7 +911,6 @@ function genBet(scored,raceInfo,marketOdds){
       allCands.sort((a,b)=>a.priority-b.priority||(b.ticket.actualOdds||0)-(a.ticket.actualOdds||0));
       for(const c of allCands){
         if(tickets.length>=3)break;
-        // 同一馬番の単勝と馬単の重複を避ける
         const isDup=tickets.some(t=>t.type===c.ticket.type&&t.desc===c.ticket.desc);
         if(!isDup)tickets.push(c.ticket);
       }
@@ -952,7 +919,6 @@ function genBet(scored,raceInfo,marketOdds){
       // ===== オッズ未入力: 単勝オッズのみで券種判断 =====
       const axisOdds=A?.odds||0;
       if(axisOdds>=5){
-        // 軸馬5倍以上→馬連推奨
         const partners=[B,C].filter(Boolean);
         const extra=himoPool.filter(h=>h!==A&&h!==B&&h!==C).slice(0,1);
         [...partners,...extra].slice(0,3).forEach(p=>{
@@ -961,7 +927,6 @@ function genBet(scored,raceInfo,marketOdds){
             reason:A.num+'番─'+p.num+'番が1・2着で的中'});
         });
       }else if(axisOdds>=3){
-        // 軸馬3〜4.9倍→ワイド推奨
         const partners=[B,C].filter(Boolean).slice(0,3);
         partners.forEach(p=>{
           tickets.push({type:'ワイド',desc:A.num+'─'+p.num,amount:100,horses:[A,p],
@@ -969,7 +934,6 @@ function genBet(scored,raceInfo,marketOdds){
             reason:A.num+'番─'+p.num+'番が3着以内で的中'});
         });
       }else{
-        // 軸馬3倍未満→見送り
         skipRecommended=true;
       }
     }
@@ -1481,8 +1445,17 @@ function showView(v){
 document.getElementById('vInput').innerHTML=`
 <div class="pnl"><h3 class="r">出馬表を貼り付けて分析</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:6px">※ ${CUTOFF_DATE} 以降のレースが対象です</div>
-<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け&#10;&#10;※オッズページも続けて貼り付けると馬連・ワイドオッズも自動取得します"></textarea>
+<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け"></textarea>
 <div id="analyzeError" class="hidden"></div>
+<div style="margin-top:12px;border-top:1px solid var(--bdr);padding-top:10px">
+<div style="font-size:13px;font-weight:700;color:var(--blu);margin-bottom:6px">各券種オッズ（任意）</div>
+<div style="font-size:11px;color:var(--dim);margin-bottom:8px">JRAオッズページから券種ごとにコピーして貼り付け。入力した券種のみ判定に使用します。</div>
+${['単勝・複勝','枠連','馬連','ワイド','馬単','3連複','3連単'].map((name,i)=>{
+  const ids=['oddsTansho','oddsWakuren','oddsUmaren','oddsWide','oddsUmatan','oddsSanrenpuku','oddsSanrentan'];
+  return '<details style="margin-bottom:4px"><summary style="cursor:pointer;font-size:12px;font-weight:600;padding:4px 8px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px;user-select:none">'+name+'オッズ</summary>'
+    +'<textarea id="'+ids[i]+'" rows="4" style="width:100%;margin-top:4px;font-size:11px" placeholder="JRAの'+name+'オッズページからコピーして貼り付け"></textarea></details>';
+}).join('')}
+</div>
 <div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
 
 
@@ -1654,6 +1627,66 @@ function doBulkImport(){
   },50);
 }
 
+// ===== オッズテキストパーサー（全券種対応） =====
+// JRA形式: 軸番号行 → 相手番号\tオッズ行（繰り返し）
+// mode: 'pair'(2頭組), 'trio'(3頭組), 'single'(単体), 'wide'(下限-上限)
+function parseOddsText(text,mode){
+  if(!text||!text.trim())return {};
+  const lines=text.split('\n');
+  const result={};
+  if(mode==='single'){
+    // 単勝・複勝: "番号\tオッズ" の羅列
+    for(const raw of lines){
+      const line=raw.replace(/[\t ]+/g,' ').trim();
+      if(!line)continue;
+      const m=line.match(/^(\d{1,2})\s+([\d,.]+)/);
+      if(m){const num=parseInt(m[1]);const v=parseFloat(m[2].replace(/,/g,''));
+        if(v>=1.0)result[String(num)]=v;}
+    }
+    return result;
+  }
+  if(mode==='trio'){
+    // 3連複・3連単: "軸番号" → "相手1-相手2\tオッズ" or "相手1\t相手2\tオッズ"
+    let axis=0;
+    for(const raw of lines){
+      const line=raw.replace(/[\t ]+/g,' ').trim();
+      if(!line)continue;
+      if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
+      if(!axis)continue;
+      // "相手1 相手2 オッズ" or "相手1-相手2 オッズ"
+      const m3=line.match(/^(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,.]+)/)||line.match(/^(\d{1,2})\s+(\d{1,2})\s+([\d,.]+)/);
+      if(m3){const a=parseInt(m3[1]),b=parseInt(m3[2]);const v=parseFloat(m3[3].replace(/,/g,''));
+        if(v>=1.0){const nums=[axis,a,b].sort((x,y)=>x-y);result[nums.join('-')]=v;}}
+    }
+    return result;
+  }
+  // pair / wide: 2頭組
+  let axis=0;
+  for(const raw of lines){
+    const line=raw.replace(/[\t ]+/g,' ').trim();
+    if(!line)continue;
+    if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
+    if(!axis)continue;
+    if(mode==='wide'){
+      // ワイド: 下限 - 上限 → 下限を使用
+      const mw=line.match(/^(\d{1,2})\s+([\d,.]+)\s*[-ー－~〜]\s*([\d,.]+)/);
+      if(mw){const partner=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
+        const a=Math.min(axis,partner),b=Math.max(axis,partner);
+        result[a+'-'+b]=lo;continue;}
+    }
+    // 通常ペア: "相手番号 オッズ"
+    const mu=line.match(/^(\d{1,2})\s+([\d,.]+)$/);
+    if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
+      if(v>=1.0){
+        if(mode==='ordered'){// 馬単: 軸→相手（順番を保持）
+          result[axis+'-'+partner]=v;
+        }else{const a=Math.min(axis,partner),b=Math.max(axis,partner);result[a+'-'+b]=v;}
+      }
+    }
+  }
+  return result;
+}
+
 function doAnalyze(){
   try{
   const t=document.getElementById('raceIn').value.trim();
@@ -1676,23 +1709,30 @@ function doAnalyze(){
   }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
-  const marketOdds=parsed._marketOdds||{umaren:{},wide:{}};
+  // 券種別テキストエリアからオッズを収集
+  const marketOdds={tansho:{},wakuren:{},umaren:{},wide:{},umatan:{},sanrenpuku:{},sanrentan:{}};
+  const getEl=eid=>document.getElementById(eid)?.value||'';
+  Object.assign(marketOdds.tansho,parseOddsText(getEl('oddsTansho'),'single'));
+  Object.assign(marketOdds.wakuren,parseOddsText(getEl('oddsWakuren'),'pair'));
+  Object.assign(marketOdds.umaren,parseOddsText(getEl('oddsUmaren'),'pair'));
+  Object.assign(marketOdds.wide,parseOddsText(getEl('oddsWide'),'wide'));
+  Object.assign(marketOdds.umatan,parseOddsText(getEl('oddsUmatan'),'ordered'));
+  Object.assign(marketOdds.sanrenpuku,parseOddsText(getEl('oddsSanrenpuku'),'trio'));
+  Object.assign(marketOdds.sanrentan,parseOddsText(getEl('oddsSanrentan'),'trio'));
+  const oddsCounts=Object.entries(marketOdds).map(([k,v])=>[k,Object.keys(v).length]).filter(([,c])=>c>0);
+  const hasOdds=oddsCounts.length>0;
+  console.log('[ODDS] 取得結果:',oddsCounts.map(([k,c])=>k+':'+c+'組').join(', ')||'なし');
   const bet=genBet(scored,parsed.info,marketOdds);
   const id=Date.now().toString();
   const venue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  // オッズデータを_oddsInputに保存
-  const oddsInput={};
-  Object.entries(marketOdds.umaren).forEach(([k,v])=>{oddsInput['馬連_'+k]=String(v)});
-  Object.entries(marketOdds.wide).forEach(([k,v])=>{oddsInput['ワイド_'+k]=String(v)});
-  const hasOdds=Object.keys(oddsInput).length>0;
-  // オッズフィルタリングはgenBet内で実施済み
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.5.0',_oddsInput:hasOdds?oddsInput:undefined,_marketOdds:hasOdds?marketOdds:undefined};
-  const oddsMsg=hasOdds?'（馬連'+Object.keys(marketOdds.umaren).length+'組/ワイド'+Object.keys(marketOdds.wide).length+'組のオッズを取得）':'';
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v3.0.0',_marketOdds:hasOdds?marketOdds:undefined};
   RACES.unshift(race);saveR(RACES);
+  // テキストエリアをクリア
   document.getElementById('raceIn').value='';
+  ['oddsTansho','oddsWakuren','oddsUmaren','oddsWide','oddsUmatan','oddsSanrenpuku','oddsSanrentan'].forEach(eid=>{const e=document.getElementById(eid);if(e)e.value=''});
   CUR=id;showView('detail');
   }catch(e){alert('分析エラー: '+e.message+'\n'+e.stack)}
 }
@@ -2146,7 +2186,7 @@ function renderDetail(id){
     // 凡例（オッズ入力済みの場合のみ表示）
     if(b.tickets.some(tk=>tk.actualOdds!=null)){
       h+=`<div style="font-size:10px;color:var(--lt);line-height:1.5;margin-top:6px">
-        単勝◎10倍↑ ／ 馬単◎15倍↑(軸ns95↑) ／ 馬連○10倍↑ ／ 3連複○20倍↑ ／ ワイド△3倍↑(補完)
+        単勝◎10倍↑ ／ 馬単◎15倍↑ ／ 馬連○10倍↑ ／ 3連複○20倍↑ ／ 3連単◎50倍↑ ／ ワイド△3倍↑
       </div>`;
     }
   }
