@@ -792,6 +792,7 @@ function genBet(scored,raceInfo,marketOdds){
 
   // 信頼度（有効ファクター数ベース）
   const axisG=A?countG(A):0;
+  const axisEv=A?.ev||0;
   let confidence='',confLevel=1;
   if(axisG>=5){confidence='★★★ 高';confLevel=3}
   else if(axisG>=3){confidence='★★ 中';confLevel=2}
