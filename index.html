@@ -385,7 +385,7 @@ const WT={1:'#1a1a1a',2:'#fff',3:'#fff',4:'#fff',5:'#1a1a1a',6:'#fff',7:'#fff',8
 const CUTOFF_DATE='2026/3/15';
 const CUTOFF_KEY='20260315';
 function dateToKey(d){if(!d)return'99999999';const p=d.split('/');if(p.length!==3)return'99999999';return p[0]+p[1].padStart(2,'0')+p[2].padStart(2,'0')}
-function isPastOnly(race){const dk=dateToKey(race?.info?.date||'');return dk!=='99999999'&&dk<=CUTOFF_KEY}
+function isPastOnly(race){return false}
 function updateCountBadge(){const el=document.getElementById('countBadge');if(el)el.textContent=RACES.length?'('+RACES.length+')':''}
 
 // ===== SIRE/JOCKEY DB =====
@@ -1451,7 +1451,7 @@ function showView(v){
 // === INPUT ===
 document.getElementById('vInput').innerHTML=`
 <div class="pnl"><h3 class="r">出馬表を貼り付けて分析</h3>
-<div style="font-size:12px;color:var(--dim);margin-bottom:6px">※ ${CUTOFF_DATE} 以降のレースが対象です</div>
+<div style="font-size:12px;color:var(--dim);margin-bottom:6px">JRA公式サイトの出馬表をコピーして貼り付けてください</div>
 <textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け"></textarea>
 <div id="analyzeError" class="hidden"></div>
 <div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
@@ -1799,12 +1799,6 @@ function doAnalyze(){
       馬が検出できませんでした。JRAの出馬表ページを「枠」から始まるテキスト形式でコピーしてください。<br>
       <span style="font-size:11px;color:var(--dim)">（ヒント：検出できた「枠」行数が ${wakuCount} 行でした）</span>
     </div>`;errDiv.classList.remove('hidden')}
-    return;
-  }
-  // 日付チェック：2026/3/15以前は分析不可
-  const pdk=dateToKey(parsed.info.date||'');
-  if(pdk!=='99999999'&&pdk<=CUTOFF_KEY){
-    alert('【'+(parsed.info.date||'日付不明')+'】\nこのレースは '+CUTOFF_DATE+' 以前のため、出馬表分析はできません。\n\n過去レースの結果は「一括取り込み」から登録してください。');
     return;
   }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
