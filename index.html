@@ -2024,6 +2024,7 @@ function renderList(){
       <button class="btn-s" onclick="recalcAll()" style="padding:6px 20px;color:var(--blu)">🔄 全レース再分析</button>
       <button class="btn-s" onclick="downloadCSV()" style="padding:6px 20px">📥 CSVダウンロード</button>
       <button class="btn-s" onclick="downloadAnalysisCSV()" style="padding:6px 20px;color:var(--blu)">🔬 検証データCSV</button>
+      <button class="btn-s" onclick="triggerCSVImport()" style="padding:6px 20px;color:var(--grn)">📂 検証CSV取込・復元</button>
       <button class="btn-s" onclick="if(confirm('保存データを全て削除しますか？（元に戻せません）')){RACES=[];saveR(RACES);renderList()}" style="padding:6px 20px;color:var(--red)">🗑 全データ削除</button>
     </div>`;
   }
@@ -2159,6 +2160,207 @@ function downloadAnalysisCSV(){
   a.download='keiba_analysis_'+new Date().toISOString().slice(0,10)+'.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// === CSV IMPORT / RESTORE ===
+function triggerCSVImport(){
+  const inp=document.createElement('input');
+  inp.type='file';inp.accept='.csv';
+  inp.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>importAnalysisCSV(ev.target.result,file.name);
+    reader.readAsText(file);
+  };
+  inp.click();
+}
+
+function parseCSVLine(line){
+  const cells=[];let cur='';let inQ=false;
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(inQ){
+      if(c==='"'&&line[i+1]==='"'){cur+='"';i++}
+      else if(c==='"')inQ=false;
+      else cur+=c;
+    }else{
+      if(c==='"')inQ=true;
+      else if(c===','){cells.push(cur);cur=''}
+      else cur+=c;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+function importAnalysisCSV(text,fileName){
+  const lines=text.replace(/^\uFEFF/,'').split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2){alert('CSVが空です');return}
+  const hdr=parseCSVLine(lines[0]);
+  const idx={};
+  hdr.forEach((h,i)=>idx[h.trim()]=i);
+  // 必須列チェック
+  const need=['日付','競馬場','レース','馬番','馬名','スコア(ns)'];
+  const missing=need.filter(k=>idx[k]===undefined);
+  if(missing.length>0){alert('必須列が見つかりません: '+missing.join(', ')+'\n\n検証データCSV形式のファイルを選択してください。');return}
+
+  const g=k=>idx[k]!==undefined;
+  // レースごとにグルーピング
+  const raceMap=new Map();
+  for(let i=1;i<lines.length;i++){
+    const c=parseCSVLine(lines[i]);
+    if(c.length<6)continue;
+    const date=c[idx['日付']]||'';
+    const venue=c[idx['競馬場']]||'';
+    const raceStr=c[idx['レース']]||'';
+    const raceKey=date+'_'+venue+'_'+raceStr;
+    if(!raceMap.has(raceKey))raceMap.set(raceKey,{date,venue,raceStr,rows:[]});
+    raceMap.get(raceKey).rows.push(c);
+  }
+
+  let imported=0,skipped=0;
+  const factorKeys=['前走','上がり','距離','血統','騎手','安定','着差','間隔','蓄積','回り','馬場'];
+
+  for(const [raceKey,rd] of raceMap){
+    const {date,venue,raceStr,rows}=rd;
+    const raceNum=raceStr.replace(/R$/i,'');
+    const distStr=rows[0][idx['距離']]||'';
+    const dist=parseInt(distStr)||0;
+    const surf=g('コース')?rows[0][idx['コース']]:'';
+    const cond=g('馬場')?rows[0][idx['馬場']]:'';
+    const cls=g('クラス')?rows[0][idx['クラス']]:'';
+    const headCount=g('頭数')?parseInt(rows[0][idx['頭数']])||rows.length:rows.length;
+
+    // 重複チェック: 同じ日付・競馬場・レース番号があればスキップ
+    const sortKey=date.replace(/\//g,'')+('0'+raceNum).slice(-2);
+    const dupLabel=date+' '+venue+' '+raceNum+'R';
+    const exists=RACES.some(r=>{
+      if(r.label===dupLabel)return true;
+      if(r.sortKey===sortKey&&r.info?.date===date)return true;
+      return false;
+    });
+    if(exists){skipped++;continue}
+
+    // 馬データ構築
+    const horses=[];
+    let hasResult=false;
+    rows.forEach(c=>{
+      const num=parseInt(c[idx['馬番']])||0;
+      const name=c[idx['馬名']]||'';
+      const odds=parseFloat(c[idx['単勝オッズ']])||0;
+      const pop=g('人気')?parseInt(c[idx['人気']])||0:0;
+      const ns=parseFloat(c[idx['スコア(ns)']])||0;
+      const actualRank=g('実際着順')?parseInt(c[idx['実際着順']])||null:null;
+      const inTop3=g('3着以内')?(c[idx['3着以内']]==='1'):actualRank!=null&&actualRank<=3;
+      if(actualRank)hasResult=true;
+
+      // ファクター復元
+      const factors={};
+      factorKeys.forEach(fk=>{
+        const col='F_'+fk;
+        if(!g(col))return;
+        const val=c[idx[col]]||'';
+        if(!val)return;
+        // 昇降級は特殊列
+        if(fk==='昇降級')return;
+        const cClass=val.startsWith('g')?'g':val.startsWith('b')?'b':'n';
+        factors[fk]={v:0,c:cClass};
+      });
+      // 昇降級
+      if(g('F_昇降級')){
+        const lv=c[idx['F_昇降級']]||'';
+        if(lv.includes('昇級'))factors['昇級']={v:-5,c:'b'};
+        else if(lv.includes('降級'))factors['降級']={v:5,c:'g'};
+      }
+
+      // 役割
+      const role=g('役割(A/B/C)')?c[idx['役割(A/B/C)']]:'';
+      const isA=role.startsWith('A');
+      const isB=role.startsWith('B');
+      const isC=role.startsWith('C');
+
+      horses.push({num,name,odds,pop,ns,score:ns,factors,actualRank,inTop3,isA,isB,isC});
+    });
+
+    // 信頼度・レース質
+    const confidence=g('信頼度')?rows[0][idx['信頼度']]:'';
+    const raceQualityScore=g('レース質スコア')?parseInt(rows[0][idx['レース質スコア']])||0:0;
+    const skipStr=g('見送り')?rows[0][idx['見送り']]:'';
+    const skipRecommended=skipStr==='見送り';
+
+    // 投資・回収（レース単位: 全行同値なので先頭行から取得）
+    const inv=g('投資額')?parseInt(rows[0][idx['投資額']])||0:0;
+    const ret=g('回収額')?parseInt(rows[0][idx['回収額']])||0:0;
+
+    // top3復元
+    const top3=horses.filter(h=>h.inTop3).sort((a,b)=>(a.actualRank||99)-(b.actualRank||99)).map(h=>String(h.num));
+
+    // コース種別推定
+    let type='';
+    if(surf){
+      if(surf.includes('ダート'))type='ダート';
+      else if(surf.includes('芝'))type='芝';
+    }
+
+    const raceId='csv_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)+'_'+imported;
+    const raceObj={
+      id:raceId,
+      label:date+' '+venue+' '+raceNum+'R',
+      sortKey,
+      info:{
+        date,
+        course:venue,
+        raceNum,
+        dist,
+        surf:surf||'',
+        type:type||'',
+        cond:cond||'',
+        cls:cls||''
+      },
+      scored:[],
+      bet:{
+        best:null,
+        tickets:[],
+        totalInv:inv,
+        confidence,
+        skipRecommended,
+        raceQuality:{score:raceQualityScore,reasons:[]}
+      },
+      result:{
+        top3:top3.length>=3?top3:[],
+        payout:ret,
+        reasons:['CSV取込データ'],
+        analysisSnapshot:{
+          raceInfo:{
+            date,venue,dist,surface:type,cond,headCount,cls
+          },
+          horses:horses.sort((a,b)=>(b.ns||0)-(a.ns||0)),
+          betResult:{
+            type:null,desc:null,wideDesc:null,
+            totalInv:inv,confidence,
+            raceQualityScore,skipRecommended
+          },
+          hitResult:{
+            wideHit:ret>0,wideTicketHit:ret>0,anyHit:ret>0,
+            label:ret>0?'的中':'不的中',
+            ret,inv,profit:ret-inv,
+            roi:inv>0?Math.round(ret/inv*100):0
+          },
+          keyPayouts:{wide:[],umaren:[],tansho:[]}
+        }
+      },
+      _scoreVer:'csv_import'
+    };
+
+    RACES.push(raceObj);
+    imported++;
+  }
+
+  if(imported>0){
+    saveR(RACES);
+    renderList();
+  }
+  alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\nファイル: ${fileName}`);
 }
 
 // === DETAIL ===
@@ -2884,11 +3086,20 @@ ${lastSync?`<div class="sync-time">最終同期: ${lastSync}</div>`:''}
 </div>
 
 <div class="pnl">
+<h3 style="color:var(--grn)">📂 検証CSV取込・復元</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
+検証データCSV（keiba_analysis_*.csv）を取り込んで、レースデータを復元します。<br>
+スコア・ファクター・着順・投資回収データが復元されます。重複レースは自動スキップされます。
+</div>
+<button class="btn btn-b" onclick="triggerCSVImport()" style="background:var(--grn)">📂 CSVファイルを選択して取込</button>
+</div>
+
+<div class="pnl">
 <h3>データ状況</h3>
 <div style="font-size:13px;line-height:1.8">
 ストレージ: <b>${fsConnected?'ファイル + localStorage':'localStorage のみ'}</b>
 ${ghConnected?' / <span class="fs-badge fs-on">GitHub連携 ON</span>':''}<br>
-レース数: <b>${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}</b> 件（予想）/ <b>${RACES.filter(r=>r.id?.startsWith('bulk_')).length}</b> 件（一括取込）<br>
+レース数: <b>${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}</b> 件（予想）/ <b>${RACES.filter(r=>r.id?.startsWith('bulk_')).length}</b> 件（一括取込）/ <b>${RACES.filter(r=>r.id?.startsWith('csv_')).length}</b> 件（CSV取込）<br>
 馬DB: <b>${Object.keys(HORSE_STORE).length}</b> 頭
 </div>
 </div>`;
