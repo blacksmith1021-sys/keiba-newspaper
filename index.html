@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.4.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.5.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -1316,6 +1316,29 @@ document.getElementById('vInput').innerHTML=`
 <div id="analyzeError" class="hidden"></div>
 <div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
 
+<div id="oddsInputSection" class="hidden">
+<div class="pnl">
+<h3 class="b">📊 オッズ入力（任意）</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
+買い目候補のオッズを入力すると、理論オッズとの比較・割安判定を表示します。<br>
+未入力でも予想・購入は通常通り動作します。
+</div>
+<div id="oddsTargetInfo" style="font-size:13px;font-weight:700;margin-bottom:8px"></div>
+<div style="display:flex;gap:12px;flex-wrap:wrap">
+<div style="flex:1;min-width:200px">
+<div style="font-size:12px;font-weight:700;margin-bottom:4px">馬連オッズ</div>
+<textarea id="oddsUmarenIn" rows="4" style="font-size:13px" placeholder="1-2：15.5&#10;1-3：22.0&#10;2-5：8.8"></textarea>
+</div>
+<div style="flex:1;min-width:200px">
+<div style="font-size:12px;font-weight:700;margin-bottom:4px">ワイドオッズ</div>
+<textarea id="oddsWideIn" rows="4" style="font-size:13px" placeholder="1-2：4.5&#10;1-3：6.2&#10;2-5：3.1"></textarea>
+</div>
+</div>
+<div style="margin-top:8px"><button class="btn btn-b" onclick="applyOddsInput()">オッズ反映</button></div>
+<div id="oddsResult" style="margin-top:8px"></div>
+</div>
+</div>
+
 <div class="pnl" style="border-top:2px solid var(--bdt)">
 <h3 class="b">📥 過去レース結果の一括取り込み（馬DB蓄積用）</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
@@ -1512,9 +1535,22 @@ function doAnalyze(){
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.3.0'};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.4.0'};
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
+  // オッズ入力セクションを展開
+  const oddsSection=document.getElementById('oddsInputSection');
+  if(oddsSection){
+    oddsSection.classList.remove('hidden');
+    oddsSection.dataset.raceId=id;
+    const info=document.getElementById('oddsTargetInfo');
+    if(info){
+      const tks=bet.tickets||[];
+      let txt=label+'<br>買い目候補: ';
+      txt+=tks.length>0?tks.map(t=>t.type+' '+t.desc).join('、'):'（見送り）';
+      info.innerHTML=txt;
+    }
+  }
   CUR=id;showView('detail');
   }catch(e){alert('分析エラー: '+e.message+'\n'+e.stack)}
 }
@@ -1972,8 +2008,8 @@ function renderDetail(id){
       const theoOdds=tk.est; // genBetで計算済みの理論オッズ
       const actualOdds=savedOdds?parseFloat(savedOdds):0;
       const ratio=actualOdds>0&&theoOdds>0?Math.round(actualOdds/theoOdds*100):0;
-      const judge=ratio===0?'-':ratio>=130?'🔵 割安':ratio>=100?'⚪ 適正':ratio>=70?'🟡 やや割高':'🔴 割高';
-      const judgeCol=ratio===0?'var(--dim)':ratio>=130?'var(--blu)':ratio>=100?'var(--grn)':ratio>=70?'var(--gld)':'var(--red)';
+      const judge=ratio===0?'-':ratio>=120?'★ 割安':ratio>=80?'適正':'割高';
+      const judgeCol=ratio===0?'var(--dim)':ratio>=120?'var(--grn)':ratio>=80?'var(--dim)':'var(--red)';
       h+=`<tr style="border-bottom:1px solid var(--bdr)">
         <td style="padding:4px 8px;font-weight:700">${tk.type} ${tk.desc}</td>
         <td style="padding:4px 8px;text-align:center">${theoOdds.toFixed(1)}倍</td>
@@ -1985,7 +2021,7 @@ function renderDetail(id){
     h+=`</table>`;
     h+=`<div style="font-size:10px;color:var(--lt);line-height:1.5">
       理論オッズ: 単勝オッズから推定。実際オッズを入力すると乖離率と割安判定を表示。<br>
-      🔵130%↑割安 ⚪100-129%適正 🟡70-99%やや割高 🔴70%未満割高
+      ★120%↑割安(緑) 80-119%適正 80%未満割高(赤)
     </div></div>`;
   }
   // 選出理由
@@ -2564,7 +2600,67 @@ async function doConnectFolder(){
   renderSyncView();
 }
 
-// オッズ入力の保存
+// オッズテキストパース: "1-2：15.5" or "1-2:15.5" or "1-2 15.5"
+function parseOddsText(text){
+  const map={};
+  text.split('\n').forEach(line=>{
+    const m=line.trim().match(/(\d+)\s*[-ー－]\s*(\d+)\s*[：:]\s*([\d.]+)/);
+    if(m){
+      const a=Math.min(+m[1],+m[2]),b=Math.max(+m[1],+m[2]);
+      map[a+'-'+b]=parseFloat(m[3]);
+    }
+  });
+  return map;
+}
+
+// 入力タブからのオッズ反映
+function applyOddsInput(){
+  const section=document.getElementById('oddsInputSection');
+  const raceId=section?.dataset.raceId;
+  const r=RACES.find(x=>x.id===raceId);
+  if(!r){alert('レースが見つかりません');return}
+
+  const umaText=document.getElementById('oddsUmarenIn').value;
+  const wideText=document.getElementById('oddsWideIn').value;
+  const umaOdds=parseOddsText(umaText);
+  const wideOdds=parseOddsText(wideText);
+
+  if(!r._oddsInput)r._oddsInput={};
+  // 保存
+  Object.entries(umaOdds).forEach(([k,v])=>{r._oddsInput['馬連_'+k]=String(v)});
+  Object.entries(wideOdds).forEach(([k,v])=>{r._oddsInput['ワイド_'+k]=String(v)});
+  saveR(RACES);
+
+  // 結果テーブルを生成
+  const tks=r.bet?.tickets||[];
+  let html='<div style="font-weight:700;font-size:13px;margin-bottom:6px;color:var(--grn)">✓ オッズを反映しました</div>';
+  if(tks.length>0){
+    html+='<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html+='<tr style="background:var(--ink);color:var(--p)"><th style="padding:4px 8px;text-align:left">買い目</th><th style="padding:4px 8px">理論</th><th style="padding:4px 8px">実際</th><th style="padding:4px 8px">乖離率</th><th style="padding:4px 8px">判定</th></tr>';
+    tks.forEach(tk=>{
+      const nums=tk.horses.map(x=>x.num).sort((a,b)=>a-b);
+      const key=nums.join('-');
+      const actual=tk.type==='馬連'?umaOdds[key]:wideOdds[key];
+      const theo=tk.est;
+      const ratio=actual&&theo?Math.round(actual/theo*100):0;
+      const judge=ratio===0?'-':ratio>=120?'★ 割安':ratio>=80?'適正':'割高・除外';
+      const col=ratio===0?'var(--dim)':ratio>=120?'var(--grn)':ratio>=80?'var(--dim)':'var(--red)';
+      html+=`<tr style="border-bottom:1px solid var(--bdr)">
+        <td style="padding:4px 8px;font-weight:700">${tk.type} ${tk.desc}</td>
+        <td style="padding:4px 8px;text-align:center">${theo.toFixed(1)}倍</td>
+        <td style="padding:4px 8px;text-align:center;font-weight:700">${actual?actual.toFixed(1)+'倍':'-'}</td>
+        <td style="padding:4px 8px;text-align:center">${ratio>0?ratio+'%':'-'}</td>
+        <td style="padding:4px 8px;text-align:center;font-weight:700;color:${col}">${judge}</td>
+      </tr>`;
+    });
+    html+='</table>';
+  }else{
+    html+='<div style="font-size:12px;color:var(--dim)">見送りレースのため買い目なし</div>';
+  }
+  document.getElementById('oddsResult').innerHTML=html;
+}
+
+// 詳細画面からのオッズ入力保存
 function saveOddsInput(raceId,inputEl){
   const r=RACES.find(x=>x.id===raceId);if(!r)return;
   if(!r._oddsInput)r._oddsInput={};
@@ -2578,8 +2674,8 @@ function saveOddsInput(raceId,inputEl){
     const actual=parseFloat(val)||0;
     const theo=tk.est||0;
     const ratio=actual>0&&theo>0?Math.round(actual/theo*100):0;
-    const judge=ratio===0?'-':ratio>=130?'🔵 割安':ratio>=100?'⚪ 適正':ratio>=70?'🟡 やや割高':'🔴 割高';
-    const judgeCol=ratio===0?'var(--dim)':ratio>=130?'var(--blu)':ratio>=100?'var(--grn)':ratio>=70?'var(--gld)':'var(--red)';
+    const judge=ratio===0?'-':ratio>=120?'★ 割安':ratio>=80?'適正':'割高';
+    const judgeCol=ratio===0?'var(--dim)':ratio>=120?'var(--grn)':ratio>=80?'var(--dim)':'var(--red)';
     const ratioEl=document.querySelector(`[data-ratio="${key}"]`);
     const judgeEl=document.querySelector(`[data-judge="${key}"]`);
     if(ratioEl)ratioEl.textContent=ratio>0?ratio+'%':'-';
