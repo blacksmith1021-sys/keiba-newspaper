@@ -2415,7 +2415,8 @@ function renderDetail(id){
 </div>`;
   const marks=['◎','○','▲','△','×'];
   s.slice(0,5).forEach((x,i)=>{
-    let tags='';for(const[k,v]of Object.entries(x.f)){tags+=`<span class="tag tag-${v.c==='g'?'g':v.c==='b'?'b':'n'}">${k}${v.v}</span>`}
+    const SHOW_TAGS=new Set(['前走','着差','上がり','トレンド','距離','コース','馬場','競馬場','回り','体重','間隔','斤量']);
+    let tags='';for(const[k,v]of Object.entries(x.f)){if(!SHOW_TAGS.has(k))continue;tags+=`<span class="tag tag-${v.c==='g'?'g':v.c==='b'?'b':'n'}">${k}${v.v}</span>`}
     h+=`<div class="row"><span style="font-weight:900;font-size:15px;color:var(--red);width:18px">${marks[i]}</span>
     <span class="wk" style="background:${WC[x.waku]};color:${WT[x.waku]}">${x.num}</span>
     <span style="font-weight:700">${x.name}</span>
