@@ -792,7 +792,6 @@ function genBet(scored,raceInfo,marketOdds){
 
   // 信頼度（有効ファクター数ベース）
   const axisG=A?countG(A):0;
-  const axisEv=A?.ev||0;
   let confidence='',confLevel=1;
   if(axisG>=5){confidence='★★★ 高';confLevel=3}
   else if(axisG>=3){confidence='★★ 中';confLevel=2}
@@ -1003,9 +1002,9 @@ function genBet(scored,raceInfo,marketOdds){
   const patName=skipRecommended?'見送り推奨':types.join('＋')+'×'+tickets.length+'点('+totalInv+'円)';
   const patReason=skipRecommended
     ?skipReason
-    :'軸A='+A.num+'番(ns'+A.ns+'/'+A.pop+'番人気/EV'+axisEv+')。レース型：'+raceType+'。'+patName+'。【'+favNote+'】';
+    :'軸A='+A.num+'番(ns'+A.ns+'/'+A.pop+'番人気/EV'+(A?.ev||0)+')。レース型：'+raceType+'。'+patName+'。【'+favNote+'】';
 
-  const bestObj={type:types[0]||'',horses:[A,B],est:eU(A,B),ev:axisEv,prob:0,
+  const bestObj={type:types[0]||'',horses:[A,B],est:eU(A,B),ev:A?.ev||0,prob:0,
     why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
 
   // レース質の警告文
