@@ -2018,13 +2018,17 @@ function renderList(){
   if(showDates.length===0){
     h+=`<div style="text-align:center;padding:30px;color:var(--dim)">データなし</div>`;
   }
-  
+
+  // CSV取込ボタンは常に表示
+  h+=`<div style="text-align:center;margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    <button class="btn-s" onclick="triggerCSVImport()" style="padding:8px 24px;color:var(--grn);font-size:14px">📂 検証CSV取込・復元</button>
+  </div>`;
+
   if(RACES.length>0){
-    h+=`<div style="text-align:center;margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    h+=`<div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button class="btn-s" onclick="recalcAll()" style="padding:6px 20px;color:var(--blu)">🔄 全レース再分析</button>
       <button class="btn-s" onclick="downloadCSV()" style="padding:6px 20px">📥 CSVダウンロード</button>
       <button class="btn-s" onclick="downloadAnalysisCSV()" style="padding:6px 20px;color:var(--blu)">🔬 検証データCSV</button>
-      <button class="btn-s" onclick="triggerCSVImport()" style="padding:6px 20px;color:var(--grn)">📂 検証CSV取込・復元</button>
       <button class="btn-s" onclick="if(confirm('保存データを全て削除しますか？（元に戻せません）')){RACES=[];saveR(RACES);renderList()}" style="padding:6px 20px;color:var(--red)">🗑 全データ削除</button>
     </div>`;
   }
