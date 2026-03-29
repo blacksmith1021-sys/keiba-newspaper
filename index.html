@@ -1896,8 +1896,9 @@ function renderList(){
       ${bandStats.filter(b=>b.total>0).map(b=>`<span>ns${b.label}: <b>${b.rate}%</b>(${b.hit}/${b.total})</span>`).join('')}
     </div>`;
   }
+  h+=`<div style="margin-top:8px;text-align:right"><button class="btn-s" onclick="downloadFullCSV()" style="padding:6px 16px">📥 全期間CSV出力</button></div>`;
   h+=`</div>`;
-  
+
   // 全日付を統一表示
   const showDates=[latestDate,...pastDates].filter(Boolean);
   
@@ -2106,6 +2107,81 @@ function downloadAnalysisCSV(){
   const a=document.createElement('a');
   a.href=url;
   a.download='keiba_analysis_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// === 全期間CSV出力 ===
+function downloadFullCSV(){
+  const BOM='\uFEFF';
+  const header=['日付','競馬場','レース番号','レース名','クラス','距離','コース','回り','馬場状態','頭数',
+    '馬番','枠番','馬名','性齢','斤量','騎手名','馬体重','馬体重増減','ブリンカー',
+    '前走競馬場','前走距離','前走コース','前走馬場','前走着順','前走頭数','前走着差','前走上がりタイム','前走上がり順位','前走間隔(週)',
+    'スコア合計','能力スコア','条件スコア','状態スコア',
+    '印','実際着順','3着以内','単勝オッズ','人気'];
+  const rows=[];
+  const sorted=[...RACES].filter(r=>r.scored?.length>0&&!r.id?.startsWith('bulk_')).sort((a,b)=>{
+    const ka=a.sortKey||a.id,kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0;
+  });
+  const abilKeys=['前走','着差','上がり','トレンド'];
+  const condKeys=['距離','コース','馬場','競馬場','回り'];
+  const stateKeys=['体重','間隔','斤量'];
+  function subScore(f,keys){
+    let s=0;
+    keys.forEach(k=>{const v=f?.[k];if(!v)return;if(v.c==='g')s+=5;else if(v.c==='b')s-=3;});
+    return s;
+  }
+  sorted.forEach(r=>{
+    const inf=r.info||{};
+    const venue=(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+    const headCount=r.scored.length;
+    const top3=r.result?.top3?.map(n=>+n)||[];
+    // 上がり順位計算用
+    const f3list=r.scored.map(h=>h._matchRace?.f3||h.prev?.[0]?.f3).filter(v=>v&&v>0);
+    const f3sorted=[...f3list].sort((a,b)=>a-b);
+
+    r.scored.forEach((h,idx)=>{
+      const l=h.prev?.[0];
+      // 前走間隔(週)
+      let weeks='';
+      if(l?.dateKey&&inf.date){
+        const parts=inf.date.split('/');
+        const today=new Date(+parts[0],+parts[1]-1,+parts[2]);
+        const ly=Math.floor(l.dateKey/10000),lm=Math.floor((l.dateKey%10000)/100),ld=l.dateKey%100;
+        const lastDay=new Date(ly,lm-1,ld);
+        const days=Math.round((today-lastDay)/(1000*60*60*24));
+        weeks=Math.round(days/7);
+      }
+      // 上がり順位
+      let f3rank='';
+      const f3=h._matchRace?.f3||l?.f3;
+      if(f3&&f3sorted.length>=3){f3rank=f3sorted.filter(v=>v<f3).length+1;}
+      // 印
+      const marks=['◎','○','▲','△'];
+      const mark=idx<4?marks[idx]:'';
+      // 実際着順
+      const actualRank=r.result?.allResults?.find(a=>a.num===h.num)?.rank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:'');
+      const inTop3=top3.includes(h.num)?1:0;
+
+      rows.push([
+        inf.date||'',venue,inf.raceNum||'','',inf.cls||'',
+        inf.dist||'',inf.type||'',inf.dir||'',inf.cond||'',headCount,
+        h.num,h.waku||'',h.name||'',(h.sex||'')+(h.age||''),h.imp||'',h.jk||'',
+        h.wt||'',h.wc!=null?(h.wc>=0?'+':'')+h.wc:'',h.bl?'有':'',
+        l?.venue||'',l?.dist||'',l?.surface==='ダ'?'ダート':l?.surface==='芝'?'芝':'',l?.cond||'',
+        l?.fin||'',l?.run||'',l?.gap!=null?l.gap:'',l?.f3||'',f3rank,weeks,
+        h.ns||'',subScore(h.f,abilKeys),subScore(h.f,condKeys),subScore(h.f,stateKeys),
+        mark,actualRank,top3.length>=3?inTop3:'',
+        h.odds||'',h.pop||''
+      ]);
+    });
+  });
+  const csv=BOM+[header,...rows].map(row=>row.map(cell=>{const s=String(cell==null?'':cell);return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='keiba_data_全期間_'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
