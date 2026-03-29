@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.3.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.4.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -1959,6 +1959,34 @@ function renderDetail(id){
     h+=`<div style="padding:6px 12px;background:rgba(26,68,136,.06);border:1px solid var(--blu);font-size:12px;border-radius:4px">
       投資合計：<b>${b.totalInv}円</b>（${b.tickets.map(t=>t.type+' '+t.amount+'円').join('＋')}）
     </div>`;
+
+    // === オッズ比較パネル ===
+    h+=`<div style="margin-top:10px;padding:10px 12px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px">
+      <div style="font-weight:700;font-size:13px;color:var(--blu);margin-bottom:8px">📊 オッズ比較（理論 vs 実際）</div>`;
+    // 理論オッズテーブル
+    h+=`<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:8px">
+      <tr style="background:var(--ink);color:var(--p)"><th style="padding:4px 8px;text-align:left">買い目</th><th style="padding:4px 8px">理論オッズ</th><th style="padding:4px 8px">実際オッズ</th><th style="padding:4px 8px">乖離率</th><th style="padding:4px 8px">判定</th></tr>`;
+    b.tickets.forEach((tk,ti)=>{
+      const nums=tk.horses.map(x=>x.num);
+      const savedOdds=r._oddsInput?.[tk.type+'_'+nums.join('-')]||'';
+      const theoOdds=tk.est; // genBetで計算済みの理論オッズ
+      const actualOdds=savedOdds?parseFloat(savedOdds):0;
+      const ratio=actualOdds>0&&theoOdds>0?Math.round(actualOdds/theoOdds*100):0;
+      const judge=ratio===0?'-':ratio>=130?'🔵 割安':ratio>=100?'⚪ 適正':ratio>=70?'🟡 やや割高':'🔴 割高';
+      const judgeCol=ratio===0?'var(--dim)':ratio>=130?'var(--blu)':ratio>=100?'var(--grn)':ratio>=70?'var(--gld)':'var(--red)';
+      h+=`<tr style="border-bottom:1px solid var(--bdr)">
+        <td style="padding:4px 8px;font-weight:700">${tk.type} ${tk.desc}</td>
+        <td style="padding:4px 8px;text-align:center">${theoOdds.toFixed(1)}倍</td>
+        <td style="padding:4px 8px;text-align:center"><input type="number" step="0.1" min="1" value="${savedOdds}" placeholder="--" style="width:60px;font-size:12px;padding:2px 4px;text-align:center;border:1px solid var(--bdr);border-radius:3px" data-odds-key="${tk.type+'_'+nums.join('-')}" onchange="saveOddsInput('${r.id}',this)"></td>
+        <td style="padding:4px 8px;text-align:center;font-weight:700" data-ratio="${tk.type+'_'+nums.join('-')}">${ratio>0?ratio+'%':'-'}</td>
+        <td style="padding:4px 8px;text-align:center;font-weight:700;color:${judgeCol}" data-judge="${tk.type+'_'+nums.join('-')}">${judge}</td>
+      </tr>`;
+    });
+    h+=`</table>`;
+    h+=`<div style="font-size:10px;color:var(--lt);line-height:1.5">
+      理論オッズ: 単勝オッズから推定。実際オッズを入力すると乖離率と割安判定を表示。<br>
+      🔵130%↑割安 ⚪100-129%適正 🟡70-99%やや割高 🔴70%未満割高
+    </div></div>`;
   }
   // 選出理由
   if(b.best?.horses?.length>0){
@@ -2534,6 +2562,29 @@ async function doConnectFolder(){
   await _fsWrite('settings.json',JSON.stringify(loadSettings()));
   if(el)el.innerHTML='<div class="sync-status sync-ok" style="margin-top:8px">✅ フォルダ接続完了！ データを保存しました。<br>今後は自動的にファイルへ保存されます。</div>';
   renderSyncView();
+}
+
+// オッズ入力の保存
+function saveOddsInput(raceId,inputEl){
+  const r=RACES.find(x=>x.id===raceId);if(!r)return;
+  if(!r._oddsInput)r._oddsInput={};
+  const key=inputEl.dataset.oddsKey;
+  const val=inputEl.value.trim();
+  r._oddsInput[key]=val;
+  saveR(RACES);
+  // 乖離率・判定を即座に更新
+  const tk=r.bet?.tickets?.find(t=>{const nums=t.horses.map(x=>x.num);return t.type+'_'+nums.join('-')===key});
+  if(tk){
+    const actual=parseFloat(val)||0;
+    const theo=tk.est||0;
+    const ratio=actual>0&&theo>0?Math.round(actual/theo*100):0;
+    const judge=ratio===0?'-':ratio>=130?'🔵 割安':ratio>=100?'⚪ 適正':ratio>=70?'🟡 やや割高':'🔴 割高';
+    const judgeCol=ratio===0?'var(--dim)':ratio>=130?'var(--blu)':ratio>=100?'var(--grn)':ratio>=70?'var(--gld)':'var(--red)';
+    const ratioEl=document.querySelector(`[data-ratio="${key}"]`);
+    const judgeEl=document.querySelector(`[data-judge="${key}"]`);
+    if(ratioEl)ratioEl.textContent=ratio>0?ratio+'%':'-';
+    if(judgeEl){judgeEl.textContent=judge;judgeEl.style.color=judgeCol}
+  }
 }
 
 function showSyncStatus(msg,type){
