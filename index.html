@@ -1632,54 +1632,34 @@ function doBulkImport(){
   },50);
 }
 
-// ===== オッズテキストパーサー（全券種対応） =====
-// JRA連結形式: "1229.83788.14199.0..." = 軸1, 相手2:29.8, 相手3:788.1, ...
-// 軸番号の後に相手番号＋オッズが区切りなく連続する
-// mode: 'pair'(2頭組), 'trio'(3頭組), 'single'(単体), 'wide'(下限-上限), 'ordered'(馬単)
+// ===== オッズテキストパーサー（全券種対応・タブ区切り＋連結型の自動判定） =====
 function parseOddsText(text,mode){
   if(!text||!text.trim())return {};
   const lines=text.split('\n');
   const result={};
 
-  // --- JRA連結形式パーサー（相手番号の順序を知っているので正確に分割できる） ---
-  // 軸Kの相手番号列: pair/wide→K+1,K+2,...,18  ordered→1,2,...(K除く)
+  // --- 連結形式パーサー: "121010.93117.9..." → 軸1,相手2:1010.9,相手3:117.9... ---
   function parseConcatLine(line,mode){
-    const s=line.replace(/[\s,]+/g,''); // 空白・カンマ除去
+    const s=line.replace(/[\s,]+/g,'');
     if(!s||!/^\d/.test(s)||!s.includes('.'))return {};
-    // 軸番号を取得: 1桁を先に試し、パース結果が多い方を採用
     let axis,rest;
     const one=parseInt(s.substring(0,1));
     const two=parseInt(s.substring(0,2));
-    // まず1桁軸で試す
     if(one>=1&&one<=9){axis=one;rest=s.substring(1);}
-    // 1桁軸で相手が見つからなければ2桁軸を試す
     else if(two>=10&&two<=18&&s.length>2){axis=two;rest=s.substring(2);}
     else return {};
-    // 相手番号の順序を決定
     let partners=[];
-    if(mode==='ordered'){
-      // 馬単: 1〜18（軸を除く）
-      for(let i=1;i<=18;i++){if(i!==axis)partners.push(i);}
-    }else{
-      // 馬連/ワイド/枠連: 軸+1〜18
-      for(let i=axis+1;i<=18;i++)partners.push(i);
-    }
+    if(mode==='ordered'){for(let i=1;i<=18;i++){if(i!==axis)partners.push(i);}}
+    else{for(let i=axis+1;i<=18;i++)partners.push(i);}
     const out={};let pi=0;
     while(rest.length>0&&pi<partners.length){
-      const p=partners[pi];
-      const pStr=String(p);
+      const p=partners[pi];const pStr=String(p);
       if(rest.startsWith(pStr)){
         rest=rest.substring(pStr.length);
-        // オッズ値を取得（JRAは小数1桁: 数字.数字1桁）
         const om=rest.match(/^(\d+\.\d)/);
-        if(om){
-          const v=parseFloat(om[1]);
-          if(mode==='ordered'){
-            out[axis+'-'+p]=v;
-          }else{
-            const a=Math.min(axis,p),b=Math.max(axis,p);
-            out[a+'-'+b]=v;
-          }
+        if(om){const v=parseFloat(om[1]);
+          if(mode==='ordered'){out[axis+'-'+p]=v;}
+          else{out[Math.min(axis,p)+'-'+Math.max(axis,p)]=v;}
           rest=rest.substring(om[1].length);
         }else break;
       }
@@ -1688,22 +1668,55 @@ function parseOddsText(text,mode){
     return out;
   }
 
-  // --- single（単勝・複勝）---
-  if(mode==='single'){
+  // --- タブ区切りパーサー: 軸番号行＋「相手番号\tオッズ」行 ---
+  function parseTabLines(lines,mode){
+    const out={};let axis=0;
     for(const raw of lines){
-      const s=raw.replace(/[\s,]+/g,'');
-      if(!s)continue;
-      // 空白区切り形式: "1 2.5"
-      const spaced=raw.replace(/[\t ]+/g,' ').trim();
-      const m=spaced.match(/^(\d{1,2})\s+([\d.]+)/);
+      const line=raw.replace(/[\t ]+/g,' ').trim();
+      if(!line)continue;
+      if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue;}
+      if(!axis)continue;
+      if(mode==='wide'){
+        const mw=line.match(/^(\d{1,2})\s+([\d,.]+)\s*[-ー－~〜]\s*([\d,.]+)/);
+        if(mw){const p=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
+          out[Math.min(axis,p)+'-'+Math.max(axis,p)]=lo;continue;}
+      }
+      const mu=line.match(/^(\d{1,2})\s+([\d,.]+)/);
+      if(mu){const p=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
+        if(v>=1.0){
+          if(mode==='ordered'){out[axis+'-'+p]=v;}
+          else{out[Math.min(axis,p)+'-'+Math.max(axis,p)]=v;}
+        }
+      }
+    }
+    return out;
+  }
+
+  // --- 自動判定: タブ区切りか連結形式かを判別 ---
+  // タブ区切り = 数字だけの行（軸番号行）が存在する
+  // 連結形式 = 1行に軸＋全相手オッズが詰まっている（小数点を含む長い行）
+  function hasTabFormat(lines){
+    return lines.some(l=>/^\s*\d{1,2}\s*$/.test(l))&&lines.some(l=>/^\s*\d{1,2}\s+[\d,.]+/.test(l));
+  }
+
+  // ========== single（単勝・複勝）==========
+  if(mode==='single'){
+    // タブ区切り: "1 2.5" per line
+    for(const raw of lines){
+      const line=raw.replace(/[\t ]+/g,' ').trim();
+      if(!line)continue;
+      const m=line.match(/^(\d{1,2})\s+([\d.]+)/);
       if(m){result[String(parseInt(m[1]))]=parseFloat(m[2]);continue;}
-      // 連結形式: "12.523.4312.1..." → 番号1:2.5, 番号2:3.4, 番号3:12.1...
-      if(/^\d/.test(s)&&s.includes('.')){
+    }
+    // タブ区切りで取れなければ連結形式
+    if(Object.keys(result).length===0){
+      for(const raw of lines){
+        const s=raw.replace(/[\s,]+/g,'');
+        if(!s||!/^\d/.test(s)||!s.includes('.'))continue;
         let rest=s,num=1;
         while(rest.length>0&&num<=18){
           const ns=String(num);
-          if(rest.startsWith(ns)){
-            rest=rest.substring(ns.length);
+          if(rest.startsWith(ns)){rest=rest.substring(ns.length);
             const om=rest.match(/^(\d+\.\d)/);
             if(om){result[String(num)]=parseFloat(om[1]);rest=rest.substring(om[1].length);}
             else break;
@@ -1717,59 +1730,65 @@ function parseOddsText(text,mode){
     return result;
   }
 
-  // --- trio（3連複・3連単）---
+  // ========== trio（3連複・3連単）==========
+  // JRA形式: 「1着 X」「2着 Y」「3着」見出し → 「Z オッズ」行の繰り返し
   if(mode==='trio'){
-    let axis=0;
+    let first=0,second=0;
     for(const raw of lines){
       const line=raw.replace(/[\t ]+/g,' ').trim();
       if(!line)continue;
-      if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
-      if(!axis)continue;
-      const m3=line.match(/^(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,.]+)/)||line.match(/^(\d{1,2})\s+(\d{1,2})\s+([\d,.]+)/);
-      if(m3){const a=parseInt(m3[1]),b=parseInt(m3[2]);const v=parseFloat(m3[3].replace(/,/g,''));
-        if(v>=1.0){const nums=[axis,a,b].sort((x,y)=>x-y);result[nums.join('-')]=v;}}
+      // 「1着 X」形式
+      const m1=line.match(/^1着\s+(\d{1,2})/);
+      if(m1){first=parseInt(m1[1]);second=0;continue;}
+      const m2=line.match(/^2着\s+(\d{1,2})/);
+      if(m2){second=parseInt(m2[1]);continue;}
+      if(/^3着/.test(line))continue; // 「3着」見出し行はスキップ
+      // 1着・2着が確定している状態で「番号 オッズ」行
+      if(first&&second){
+        const mt=line.match(/^(\d{1,2})\s+([\d,.]+)/);
+        if(mt){const third=parseInt(mt[1]);const v=parseFloat(mt[2].replace(/,/g,''));
+          if(v>=1.0){
+            if(mode==='trio'){
+              const nums=[first,second,third].sort((a,b)=>a-b);
+              result[nums.join('-')]=v;
+            }
+          }
+        }
+      }
     }
-    console.log('[ODDS PARSE] 3連:',Object.keys(result).length+'件');
-    return result;
-  }
-
-  // --- pair / wide / ordered（馬連・ワイド・馬単・枠連）---
-  // まず連結形式を試す
-  for(const raw of lines){
-    const out=parseConcatLine(raw,mode);
-    Object.assign(result,out);
-  }
-  // 連結形式で取れた場合はそれを使う
-  if(Object.keys(result).length>0){
-    const label=mode==='wide'?'ワイド':mode==='ordered'?'馬単':'馬連/枠連';
-    console.log('[ODDS PARSE]',label+'(連結):',Object.keys(result).length+'件',
+    // フォールバック: 旧形式（軸番号 → 相手1-相手2 オッズ）
+    if(Object.keys(result).length===0){
+      let axis=0;
+      for(const raw of lines){
+        const line=raw.replace(/[\t ]+/g,' ').trim();
+        if(!line)continue;
+        if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue;}
+        if(!axis)continue;
+        const m3=line.match(/^(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,.]+)/)||line.match(/^(\d{1,2})\s+(\d{1,2})\s+([\d,.]+)/);
+        if(m3){const a=parseInt(m3[1]),b=parseInt(m3[2]);const v=parseFloat(m3[3].replace(/,/g,''));
+          if(v>=1.0){const nums=[axis,a,b].sort((x,y)=>x-y);result[nums.join('-')]=v;}}
+      }
+    }
+    console.log('[ODDS PARSE] 3連:',Object.keys(result).length+'件',
       Object.entries(result).slice(0,3).map(([k,v])=>k+':'+v+'倍').join(', '));
     return result;
   }
-  // フォールバック: 空白区切り形式（軸番号行＋相手番号\tオッズ行）
-  let axis=0;
-  for(const raw of lines){
-    const line=raw.replace(/[\t ]+/g,' ').trim();
-    if(!line)continue;
-    if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
-    if(!axis)continue;
-    if(mode==='wide'){
-      const mw=line.match(/^(\d{1,2})\s+([\d,.]+)\s*[-ー－~〜]\s*([\d,.]+)/);
-      if(mw){const partner=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
-        const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=lo;continue;}
-    }
-    const mu=line.match(/^(\d{1,2})\s+([\d,.]+)$/);
-    if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
-      if(v>=1.0){
-        if(mode==='ordered'){result[axis+'-'+partner]=v;}
-        else{const a=Math.min(axis,partner),b=Math.max(axis,partner);result[a+'-'+b]=v;}
-      }
+
+  // ========== pair / wide / ordered（馬連・ワイド・馬単・枠連）==========
+  // タブ区切り形式を先に試す
+  if(hasTabFormat(lines)){
+    Object.assign(result,parseTabLines(lines,mode));
+  }
+  // タブ区切りで取れなければ連結形式を試す
+  if(Object.keys(result).length===0){
+    for(const raw of lines){
+      const out=parseConcatLine(raw,mode);
+      Object.assign(result,out);
     }
   }
+  const label=mode==='wide'?'ワイド':mode==='ordered'?'馬単':'馬連/枠連';
   if(Object.keys(result).length>0){
-    const label=mode==='wide'?'ワイド':mode==='ordered'?'馬単':'馬連/枠連';
-    console.log('[ODDS PARSE]',label+'(行区切り):',Object.keys(result).length+'件',
+    console.log('[ODDS PARSE]',label+':',Object.keys(result).length+'件',
       Object.entries(result).slice(0,3).map(([k,v])=>k+':'+v+'倍').join(', '));
   }
   return result;
