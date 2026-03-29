@@ -1328,12 +1328,29 @@ let CUR=null; // current race id
 function getPhaseInfo(){
   const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
   const count=done.length;
-  if(count>=50){
-    return{phase:2,count,message:'🎯 フェーズ2移行条件を達成しました！',detail:'ファクター検証が可能なデータ数に達しました。設計の見直しを検討する時期です。',color:'var(--grn)',bg:'rgba(45,106,48,.08)',urgent:true};
+  // v4.1以降（レース質3パターン）で分析されたレースをカウント
+  const v4races=done.filter(r=>r.bet?.patReason?.includes('レース質：')).length;
+  const P3_TARGET=100; // フェーズ3移行に必要なv4.1レース数
+  if(count>=50&&v4races>=P3_TARGET){
+    return{phase:3,count,v4count:v4races,target:P3_TARGET,
+      message:'🎯 フェーズ3移行条件を達成しました！',
+      detail:'v4.1設計（レース質3パターン）で'+v4races+'レースのデータが蓄積されました。回収率の統計検証が可能です。',
+      color:'var(--grn)',bg:'rgba(45,106,48,.08)',urgent:true};
+  }else if(count>=50){
+    return{phase:2,count,v4count:v4races,target:P3_TARGET,
+      message:'📊 フェーズ3まであと '+(P3_TARGET-v4races)+' レース（v4.1設計）',
+      detail:'フェーズ2（ファクター重み改定）完了済み。v4.1設計でのデータ蓄積中（'+v4races+'/'+P3_TARGET+'レース）。',
+      color:'var(--blu)',bg:'rgba(26,68,136,.06)',urgent:false};
   }else if(count>=40){
-    return{phase:1,count,message:'📊 フェーズ2まであと '+(50-count)+' レース',detail:'現在 '+count+'/50 レース蓄積済み。引き続き結果を入力してください。',color:'var(--gld)',bg:'rgba(184,134,11,.08)',urgent:false};
+    return{phase:1,count,v4count:v4races,target:50,
+      message:'📊 フェーズ2まであと '+(50-count)+' レース',
+      detail:'現在 '+count+'/50 レース蓄積済み。引き続き結果を入力してください。',
+      color:'var(--gld)',bg:'rgba(184,134,11,.08)',urgent:false};
   }else{
-    return{phase:1,count,message:'📊 データ蓄積中 '+count+'/50 レース',detail:'フェーズ2（ファクター検証）には50レースの結果データが必要です。',color:'var(--blu)',bg:'rgba(26,68,136,.06)',urgent:false};
+    return{phase:1,count,v4count:v4races,target:50,
+      message:'📊 データ蓄積中 '+count+'/50 レース',
+      detail:'フェーズ2（ファクター検証）には50レースの結果データが必要です。',
+      color:'var(--blu)',bg:'rgba(26,68,136,.06)',urgent:false};
   }
 }
 
@@ -1341,11 +1358,11 @@ function updatePhaseBanner(){
   const existing=document.getElementById('phaseBanner');
   if(existing)existing.remove();
   const pi=getPhaseInfo();
-  if(!pi.urgent)return;
+  if(pi.phase<2)return; // フェーズ1はバナー非表示
   const banner=document.createElement('div');
   banner.id='phaseBanner';
   banner.style.cssText='background:var(--grn);color:#fff;text-align:center;padding:8px 16px;font-size:12px;font-weight:700;cursor:pointer;';
-  banner.innerHTML='🎯 フェーズ2移行条件達成！ファクタータブで詳細を確認 →';
+  banner.innerHTML=pi.phase>=3?'🎯 フェーズ3移行条件達成！統計タブで詳細を確認 →':'📊 フェーズ3まであとv4.1で'+(pi.target-pi.v4count)+'レース → 統計タブ';
   banner.onclick=()=>showView('trends');
   document.querySelector('.ct').prepend(banner);
 }
@@ -2548,18 +2565,23 @@ function renderTrends(){
   h+=`<div style="background:${pi.bg};border:2px solid ${pi.color};padding:14px;border-radius:6px;margin-bottom:12px">
     <div style="font-weight:700;font-size:14px;color:${pi.color};margin-bottom:4px">${pi.message}</div>
     <div style="font-size:12px;color:var(--dim);line-height:1.7">${pi.detail}</div>
-    ${pi.urgent?`<div style="margin-top:10px;padding:10px;background:rgba(45,106,48,.12);border-radius:4px;font-size:12px;line-height:1.8;color:var(--ink)">
-      <b>フェーズ2でやること：</b><br>
-      ・どのファクターが的中と相関しているかを検証する<br>
-      ・有効なファクターだけを残してスコアリングを再設計する<br>
-      ・「強い馬」ではなく「オッズに対して割安な馬」を探す設計に転換する<br>
-      <b style="color:var(--red)">→ この段階になったらClaude Codeに相談してください</b>
+    ${pi.phase>=3?`<div style="margin-top:10px;padding:10px;background:rgba(45,106,48,.12);border-radius:4px;font-size:12px;line-height:1.8;color:var(--ink)">
+      <b>フェーズ3でやること：</b><br>
+      ・レース質3パターン（軸馬明確/標準/混戦）ごとの的中率・回収率を検証<br>
+      ・パターン別に最適なオッズ閾値を調整する<br>
+      ・見送り基準の精度を検証し、買うべきレースを絞り込む<br>
+      <b style="color:var(--red)">→ CSVエクスポートしてClaude Codeに相談してください</b>
+    </div>`:pi.phase>=2?`<div style="margin-top:10px;padding:10px;background:rgba(26,68,136,.08);border-radius:4px;font-size:12px;line-height:1.8;color:var(--ink)">
+      <b>現在フェーズ2（完了済み）→ フェーズ3に向けてデータ蓄積中</b><br>
+      ・v4.1設計（レース質3パターン）でのレース結果を蓄積中<br>
+      ・${pi.target}レース到達でフェーズ3（回収率検証・閾値最適化）に移行<br>
+      ・引き続き出馬表＋オッズを入力して結果を記録してください
     </div>`:''}
     <div style="margin-top:8px">
       <div style="background:var(--p2);height:8px;border-radius:4px;overflow:hidden">
-        <div style="width:${Math.min(pi.count/50*100,100)}%;height:100%;background:${pi.color};border-radius:4px;transition:width .3s"></div>
+        <div style="width:${pi.phase>=2?Math.min((pi.v4count||0)/pi.target*100,100):Math.min(pi.count/50*100,100)}%;height:100%;background:${pi.color};border-radius:4px;transition:width .3s"></div>
       </div>
-      <div style="font-size:10px;color:var(--dim);margin-top:2px;text-align:right">${pi.count}/50</div>
+      <div style="font-size:10px;color:var(--dim);margin-top:2px;text-align:right">${pi.phase>=2?(pi.v4count||0)+'/'+pi.target+' (v4.1)':pi.count+'/50'}</div>
     </div>
   </div>`;
 
