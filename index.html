@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.6.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.6.1 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -788,7 +788,7 @@ function genBet(scored,raceInfo){
     const remaining=getDailyBudget()-getTodayInvested();
     if(remaining<100)budgetOver=true;
   }
-  const skipRecommended=topNs<70||nsDiff<5||noAxis||budgetOver;
+  let skipRecommended=topNs<70||nsDiff<5||noAxis||budgetOver;
 
   // 信頼度（表示用）
   const axisEv=A?.ev||0;
@@ -833,6 +833,13 @@ function genBet(scored,raceInfo){
         reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
     }
   }
+  // 最低オッズ条件: 馬連4.0倍未満・ワイド2.5倍未満を除外
+  tickets=tickets.filter(tk=>{
+    if(tk.type==='馬連'&&tk.est<4.0)return false;
+    if(tk.type==='ワイド'&&tk.est<2.5)return false;
+    return true;
+  });
+  if(!skipRecommended&&tickets.length===0)skipRecommended=true;
   const totalInv=tickets.reduce((s,t)=>s+t.amount,0);
 
   // 戦略説明
