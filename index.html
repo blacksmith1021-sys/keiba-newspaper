@@ -1484,17 +1484,6 @@ document.getElementById('vInput').innerHTML=`
 <div style="font-size:12px;color:var(--dim);margin-bottom:6px">※ ${CUTOFF_DATE} 以降のレースが対象です</div>
 <textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け"></textarea>
 <div id="analyzeError" class="hidden"></div>
-<details style="margin-top:12px;border:1px solid var(--bdr);border-radius:6px;overflow:hidden">
-<summary style="cursor:pointer;padding:8px 12px;background:var(--p2);font-size:13px;font-weight:700;color:var(--blu);user-select:none;list-style:none;display:flex;align-items:center;gap:6px">
-<span style="transition:transform .2s">▶</span> オッズ入力（任意）</summary>
-<div style="padding:8px 12px">
-<div style="font-size:11px;color:var(--dim);margin-bottom:8px;line-height:1.6">JRAオッズページから券種ごとにコピーして貼り付け。入力した券種のみ推奨判定に使用します。</div>
-${['単勝・複勝','枠連','馬連','ワイド','馬単','3連複','3連単'].map((name,i)=>{
-  const ids=['oddsTansho','oddsWakuren','oddsUmaren','oddsWide','oddsUmatan','oddsSanrenpuku','oddsSanrentan'];
-  return '<details style="margin-bottom:4px"><summary style="cursor:pointer;font-size:12px;font-weight:600;padding:5px 8px;background:var(--p);border:1px solid var(--bdr);border-radius:4px;user-select:none">'+name+'</summary>'
-    +'<textarea id="'+ids[i]+'" rows="4" style="width:100%;margin-top:4px;font-size:11px;box-sizing:border-box" placeholder="JRAオッズページをコピーして貼り付け"></textarea></details>';
-}).join('')}
-</div></details>
 <div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
 
 
@@ -1850,57 +1839,16 @@ function doAnalyze(){
   }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
-  // 券種別テキストエリアからオッズを収集
-  const marketOdds={tansho:{},wakuren:{},umaren:{},wide:{},umatan:{},sanrenpuku:{},sanrentan:{}};
-  const getEl=eid=>document.getElementById(eid)?.value||'';
-  Object.assign(marketOdds.tansho,parseOddsText(getEl('oddsTansho'),'single'));
-  Object.assign(marketOdds.wakuren,parseOddsText(getEl('oddsWakuren'),'pair'));
-  Object.assign(marketOdds.umaren,parseOddsText(getEl('oddsUmaren'),'pair'));
-  Object.assign(marketOdds.wide,parseOddsText(getEl('oddsWide'),'wide'));
-  Object.assign(marketOdds.umatan,parseOddsText(getEl('oddsUmatan'),'ordered'));
-  Object.assign(marketOdds.sanrenpuku,parseOddsText(getEl('oddsSanrenpuku'),'trio'));
-  Object.assign(marketOdds.sanrentan,parseOddsText(getEl('oddsSanrentan'),'trio'));
-  const oddsCounts=Object.entries(marketOdds).map(([k,v])=>[k,Object.keys(v).length]).filter(([,c])=>c>0);
-  const hasOdds=oddsCounts.length>0;
-  console.log('[ODDS] 取得結果:',oddsCounts.map(([k,c])=>k+':'+c+'組').join(', ')||'なし');
-
-  // === レース不一致チェック: オッズの馬番が出馬表に存在するか ===
-  if(hasOdds){
-    const raceNums=new Set(parsed.horses.map(h=>h.num));
-    const maxRaceNum=Math.max(...raceNums);
-    const oddsNums=new Set();
-    const nameMap={tansho:'単勝',wakuren:'枠連',umaren:'馬連',wide:'ワイド',umatan:'馬単',sanrenpuku:'3連複',sanrentan:'3連単'};
-    // 各券種のキーから馬番を抽出
-    for(const[type,odds]of Object.entries(marketOdds)){
-      if(!odds||Object.keys(odds).length===0)continue;
-      for(const key of Object.keys(odds)){
-        key.split('-').forEach(n=>{const num=parseInt(n);if(num)oddsNums.add(num);});
-      }
-    }
-    // 出馬表に存在しない馬番のオッズを除外（JRAは最大頭数分のデータを出力するため）
-    let filtered=0;
-    for(const[type,odds]of Object.entries(marketOdds)){
-      if(!odds)continue;
-      for(const key of Object.keys(odds)){
-        const nums=key.split('-').map(Number);
-        if(nums.some(n=>n>maxRaceNum)){delete odds[key];filtered++;}
-      }
-    }
-    if(filtered>0)console.log('[ODDS] 出馬表外の馬番を'+filtered+'件除外（'+raceNums.size+'頭立て・最大'+maxRaceNum+'番）');
-  }
-
-  const bet=genBet(scored,parsed.info,marketOdds);
+  const bet=genBet(scored,parsed.info);
   const id=Date.now().toString();
   const venue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v3.0.0',_marketOdds:hasOdds?marketOdds:undefined};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v3.0.0'};
   RACES.unshift(race);saveR(RACES);
   autoSaveAll(); // 分析完了後に自動保存
-  // テキストエリアをクリア
   document.getElementById('raceIn').value='';
-  ['oddsTansho','oddsWakuren','oddsUmaren','oddsWide','oddsUmatan','oddsSanrenpuku','oddsSanrentan'].forEach(eid=>{const e=document.getElementById(eid);if(e)e.value=''});
   CUR=id;showView('detail');
   }catch(e){alert('分析エラー: '+e.message+'\n'+e.stack)}
 }
@@ -2591,12 +2539,6 @@ function renderDetail(id){
       <input type="number" id="payIn" placeholder="0" style="width:80px;padding:5px;border:1px solid var(--bdr);background:var(--p2);font-size:13px">
       <span style="font-size:12px;color:var(--dim)">円</span>
     </div>
-    <div style="margin-top:8px;padding:10px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px">
-      <div style="font-size:12px;font-weight:700;color:var(--blu);margin-bottom:6px">単勝オッズ・人気（任意）</div>
-      <div style="font-size:11px;color:var(--dim);margin-bottom:6px">馬番ごとにオッズと人気を記録します。形式：馬番=オッズ,人気（1行1頭）</div>
-      <textarea id="oddsPopIn" rows="3" placeholder="例:&#10;1=3.5,2&#10;5=12.8,6&#10;8=1.8,1" style="min-height:60px;font-size:13px"></textarea>
-    </div>
-    <div style="margin-top:8px">
       <button class="btn btn-b" onclick="doSaveResult('${id}')" id="saveResBtn">結果を保存</button>
     </div>`;
     // Auto-parse on input
@@ -2805,17 +2747,6 @@ function doSaveResult(id){
   const pr=parseResult(ta.value,r.scored);
   if(pr.top3.length<3){alert('着順を読み取れませんでした。\n1着〜3着の馬番が含まれるテキストを貼り付けてください。');return}
   const pay=parseInt(document.getElementById('payIn')?.value)||pr.payout||0;
-  // オッズ・人気を手動入力から取得して馬データに反映
-  const opIn=document.getElementById('oddsPopIn');
-  if(opIn&&opIn.value.trim()){
-    opIn.value.trim().split('\n').forEach(line=>{
-      const m=line.match(/^(\d+)\s*[=＝]\s*([\d.]+)\s*[,，]\s*(\d+)/);
-      if(!m)return;
-      const num=+m[1],odds=parseFloat(m[2]),pop=+m[3];
-      const horse=r.scored?.find(h=>h.num===num);
-      if(horse){horse.odds=odds;horse.pop=pop}
-    });
-  }
   const reasons=analyzeLoss(r,pr.top3);
   r.result={
     top3:pr.top3.map(String),
@@ -3170,28 +3101,6 @@ async function doConnectFolder(){
   renderSyncView();
 }
 
-// 詳細画面からのオッズ入力保存
-function saveOddsInput(raceId,inputEl){
-  const r=RACES.find(x=>x.id===raceId);if(!r)return;
-  if(!r._oddsInput)r._oddsInput={};
-  const key=inputEl.dataset.oddsKey;
-  const val=inputEl.value.trim();
-  r._oddsInput[key]=val;
-  saveR(RACES);
-  // 乖離率・判定を即座に更新
-  const tk=r.bet?.tickets?.find(t=>{const nums=t.horses.map(x=>x.num);return t.type+'_'+nums.join('-')===key});
-  if(tk){
-    const actual=parseFloat(val)||0;
-    const theo=tk.est||0;
-    const ratio=actual>0&&theo>0?Math.round(actual/theo*100):0;
-    const judge=ratio===0?'-':ratio>=120?'★ 割安':ratio>=80?'適正':'割高';
-    const judgeCol=ratio===0?'var(--dim)':ratio>=120?'var(--grn)':ratio>=80?'var(--dim)':'var(--red)';
-    const ratioEl=document.querySelector(`[data-ratio="${key}"]`);
-    const judgeEl=document.querySelector(`[data-judge="${key}"]`);
-    if(ratioEl)ratioEl.textContent=ratio>0?ratio+'%':'-';
-    if(judgeEl){judgeEl.textContent=judge;judgeEl.style.color=judgeCol}
-  }
-}
 
 function showSyncStatus(msg,type){
   const el=document.getElementById('syncStatus');
