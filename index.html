@@ -448,45 +448,61 @@ h.prev.sort((a,b)=>b.dateKey-a.dateKey);
 if(h.name&&h.num)r.horses.push(h)}
 // === オッズデータ解析（JRAオッズページ形式: 軸馬番号行＋相手馬番号\tオッズ行） ===
 r._marketOdds={umaren:{},wide:{}};
-// 馬連オッズ（馬番順）〜 ワイドオッズ（馬番順）の間を馬連として解析
-// ワイドオッズ（馬番順）以降をワイドとして解析
-const umarenStart=t.indexOf('馬連オッズ');
-const wideStart=t.indexOf('ワイドオッズ');
-function parseBlockOdds(block,isWide){
-  const lines=block.split('\n').map(l=>l.trim()).filter(Boolean);
-  let axis=0;const result={};
-  for(const line of lines){
-    // 軸馬番号行: 数字のみの行
+// デバッグ: テキスト内のマーカー検索
+const umarenIdx=t.indexOf('馬連オッズ');
+const wideIdx=t.indexOf('ワイドオッズ');
+console.log('[ODDS DEBUG] テキスト長:',t.length,'馬連オッズ位置:',umarenIdx,'ワイドオッズ位置:',wideIdx);
+if(umarenIdx>=0)console.log('[ODDS DEBUG] 馬連マーカー周辺:',JSON.stringify(t.substring(umarenIdx,umarenIdx+50)));
+if(wideIdx>=0)console.log('[ODDS DEBUG] ワイドマーカー周辺:',JSON.stringify(t.substring(wideIdx,wideIdx+50)));
+// マーカーが見つからない場合、類似文字列を検索
+if(umarenIdx<0){
+  const uTest=t.match(/馬連[^\n]{0,20}/);
+  console.log('[ODDS DEBUG] 馬連を含む行:',uTest?uTest[0]:'なし');
+}
+if(wideIdx<0){
+  const wTest=t.match(/ワイド[^\n]{0,20}/);
+  console.log('[ODDS DEBUG] ワイドを含む行:',wTest?wTest[0]:'なし');
+}
+function parseBlockOdds(block,isWide,label){
+  const lines=block.split('\n');
+  let axis=0;const result={};let parsed=0;
+  for(let i=0;i<lines.length;i++){
+    const raw=lines[i];
+    const line=raw.replace(/[\t ]+/g,' ').trim();
+    if(!line)continue;
+    // 軸馬番号行: 数字1〜2桁のみの行
     if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
     if(!axis)continue;
     if(isWide){
-      // ワイド: "相手番号\tオッズ下限\t-\tオッズ上限" → 下限を使用
-      const mw=line.match(/^(\d{1,2})\s+([\d,]+\.\d)\s*[-ー－]\s*([\d,]+\.\d)/);
+      // ワイド: "相手番号 オッズ下限 - オッズ上限" → 下限を使用
+      const mw=line.match(/^(\d{1,2})\s+([\d,.]+)\s*[-ー－~〜]\s*([\d,.]+)/);
       if(mw){const partner=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
         const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=lo;continue}
-      // ワイド単一値: "相手番号\tオッズ"
-      const mws=line.match(/^(\d{1,2})\s+([\d,]+\.\d)/);
-      if(mws){const partner=parseInt(mws[1]);const v=parseFloat(mws[2].replace(/,/g,''));
+        result[a+'-'+b]=lo;parsed++;continue}
+    }
+    // 馬連 or ワイド単一値: "相手番号 オッズ"
+    const mu=line.match(/^(\d{1,2})\s+([\d,.]+)$/);
+    if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
+      if(v>=1.0){// オッズとして妥当な値のみ
         const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=v}
-    }else{
-      // 馬連: "相手番号\tオッズ"
-      const mu=line.match(/^(\d{1,2})\s+([\d,]+\.\d)/);
-      if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
-        const a=Math.min(axis,partner),b=Math.max(axis,partner);
-        result[a+'-'+b]=v}
+        result[a+'-'+b]=v;parsed++}
     }
   }
+  console.log('[ODDS DEBUG]',label,'パース結果:',parsed,'件',JSON.stringify(Object.entries(result).slice(0,5)));
   return result;
 }
-if(umarenStart>=0){
-  const uEnd=wideStart>=0?wideStart:t.length;
-  r._marketOdds.umaren=parseBlockOdds(t.substring(umarenStart,uEnd),false);
+if(umarenIdx>=0){
+  const uEnd=wideIdx>=0?wideIdx:t.length;
+  r._marketOdds.umaren=parseBlockOdds(t.substring(umarenIdx,uEnd),false,'馬連');
 }
-if(wideStart>=0){
-  r._marketOdds.wide=parseBlockOdds(t.substring(wideStart),true);
+if(wideIdx>=0){
+  r._marketOdds.wide=parseBlockOdds(t.substring(wideIdx),true,'ワイド');
 }
+// 最終デバッグ
+const uCnt=Object.keys(r._marketOdds.umaren).length;
+const wCnt=Object.keys(r._marketOdds.wide).length;
+console.log('[ODDS DEBUG] 最終結果: 馬連'+uCnt+'組, ワイド'+wCnt+'組');
+if(r._marketOdds.umaren['1-3'])console.log('[ODDS DEBUG] 馬連1-3:',r._marketOdds.umaren['1-3']);
 return r}
 
 // ===== SCORING =====
