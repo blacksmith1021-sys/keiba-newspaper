@@ -473,7 +473,7 @@ for(let i=0;i<Math.min(L.length,8);i++){
 }
 // フォールバック：数字の次の行
 if(!h.name)for(let i=0;i<L.length;i++){if(/^\d+$/.test(L[i])&&i+1<L.length){let nx=L[i+1];if(nx&&!nx.match(/^[\d.(]/)&&nx!=='ブリンカー着用'){h.name=nx.replace(/\t.*$/,'').trim();break}if(nx==='ブリンカー着用'&&i+2<L.length){h.name=L[i+2].replace(/\t.*$/,'').trim();break}}}
-m=sec.match(/([\d.]+)\s*\n\s*\((\d+)番人気\)/);if(m){h.odds=parseFloat(m[1]);h.pop=+m[2]}m=sec.match(/\((\d+\.\d+\.\d+\.\d+)\)/);if(m){const p=m[1].split('.');h.rec={w:+p[0],s:+p[1],t:+p[2],o:+p[3]};h.starts=+p[0]+ +p[1]+ +p[2]+ +p[3]}m=sec.match(/(\d{3,})kg\s*\(([+\-\d初出走]+)\)/);if(m){h.wt=+m[1];h.wc=m[2]==='初出走'?null:parseInt(m[2])}m=sec.match(/(牡|牝|せん)(\d)/);if(m){h.sex=m[1];h.age=+m[2]}
+m=sec.match(/([\d.]+)\s*\n\s*\((\d+)番人気\)/);if(m){/* オッズ・人気は出馬表からは取得しない（結果入力時に記録） */}m=sec.match(/\((\d+\.\d+\.\d+\.\d+)\)/);if(m){const p=m[1].split('.');h.rec={w:+p[0],s:+p[1],t:+p[2],o:+p[3]};h.starts=+p[0]+ +p[1]+ +p[2]+ +p[3]}m=sec.match(/(\d{3,})kg\s*\(([+\-\d初出走]+)\)/);if(m){h.wt=+m[1];h.wc=m[2]==='初出走'?null:parseInt(m[2])}m=sec.match(/(牡|牝|せん)(\d)/);if(m){h.sex=m[1];h.age=+m[2]}
 for(let i=0;i<L.length;i++){if(/^\d+\.\dkg$/.test(L[i])){for(let j=i+1;j<L.length;j++){const c=L[j];if(c&&!c.match(/^\d{4}年/)&&!c.match(/^父/)&&!c.match(/^母/)&&c.length<20&&(c.match(/[◇△▲★☆◆]/)||c.match(/[一-龥]{1,4}\s/)||c.match(/[ぁ-ん]/))){const dm=c.match(/^([◆◇])/);h.jkDiscount=dm?dm[1]:null;h.jk=c.replace(/[◇△▲★☆◆]/g,'').trim();h.imp=parseFloat(L[i]);break}}break}}
 m=sec.match(/父：(.+)/);if(m)h.sire=m[1].trim();m=sec.match(/母の父：(.+)/);if(m)h.bms=m[1].trim();if(!h.bms){m=sec.match(/母父[:：]\s*(.+)/);if(m)h.bms=m[1].trim()}m=sec.match(/([^\n]+)\((美浦|栗東)\)/);if(m)h.trainer=m[1].trim();
 // 総賞金（馬ごとのsec内から取得）
@@ -639,6 +639,14 @@ if(h.prev?.length>0){const ps=h.prev.filter(p=>p.pos?.length>=2).map(p=>p.pos[0]
 // 安定感
 if(h.prev?.length>=2){const rg=h.prev.slice(0,3).filter(p=>p.fin<=5).length;if(rg>=2){s+=fw('安定',6);f['安定']={v:'◎',c:'g'}}else if(rg>=1){s+=2}else{s-=2;f['安定']={v:'△',c:'b'}}}
 
+// 過去4走トレンド（前走 vs 2走前の着順比較）
+if(h.prev?.length>=2&&h.prev[0]?.fin&&h.prev[1]?.fin){
+  const r1=h.prev[0].fin,r2=h.prev[1].fin;
+  if(r1<r2){s+=10;f['トレンド']={v:r2+'着→'+r1+'着(↑改善)',c:'g'}}
+  else if(r1===r2){s+=5;f['トレンド']={v:r1+'着→'+r1+'着(→横ばい)',c:'n'}}
+  else{f['トレンド']={v:r2+'着→'+r1+'着(↓悪化)',c:'b'}}
+}
+
 // ★着差（前走着順の補足情報。配点は控えめに）
 if(l?.gap!=null){
   if(l.gap===0){s+=fw('着差',5);f['着差']={v:'1着',c:'g'}}
@@ -686,14 +694,14 @@ if(h.name&&HORSE_DB[h.name]){
 // 初出走（データなしでも血統・騎手・斤量で評価可能。基準点を50に保つ）
 if(!h.prev||h.prev.length===0){f['初出走']={v:'',c:'n'}}
 
-// クラス昇降（前走のクラスと今回のクラスを比較）
+// クラス昇降（データ記録のみ、スコア影響なし。検証後に配点追加予定）
 if(l?.cls&&inf.cls){
   const clsOrder=['新馬','未勝利','1勝','2勝','3勝','オープン','リステッド','GⅢ','GⅡ','GⅠ'];
   const getCls=c=>{for(let i=clsOrder.length-1;i>=0;i--){if(c.includes(clsOrder[i]))return i}return-1};
   const prevCls=getCls(l.cls),nowCls=getCls(inf.cls);
   if(prevCls>=0&&nowCls>=0){
-    if(nowCls>prevCls){s-=5;f['昇級']={v:l.cls+'→'+inf.cls,c:'b'}}
-    else if(nowCls<prevCls){s+=5;f['降級']={v:l.cls+'→'+inf.cls,c:'g'}}
+    if(nowCls>prevCls){f['昇級']={v:l.cls+'→'+inf.cls,c:'b'}}
+    else if(nowCls<prevCls){f['降級']={v:l.cls+'→'+inf.cls,c:'g'}}
   }
 }
 
@@ -703,14 +711,32 @@ if(isDirt&&h.bms){const br=BMS_DIRT[h.bms];if(br==='◎'){s+=4;f['母父']={v:'�
 // 前走斤量との増減
 if(h.imp&&l?.weight&&l.weight>0){const wd=h.imp-l.weight;if(wd<=-2){s+=5;f['斤量増減']={v:wd+'kg',c:'g'}}else if(wd===-1){s+=3;f['斤量増減']={v:wd+'kg',c:'g'}}else if(wd===0){f['斤量増減']={v:'±0',c:'n'}}else if(wd===1){s-=2;f['斤量増減']={v:'+'+wd+'kg',c:'b'}}else if(wd>=2){s-=4;f['斤量増減']={v:'+'+wd+'kg(増)',c:'b'}}}
 
-// 乗り替わり評価
-if(h.jk&&l?.jockey){const pn=l.jockey.replace(/\s/g,''),cn=h.jk.replace(/\s/g,'');const same=pn===cn||cn.includes(pn)||pn.includes(cn);if(!same){const cr=JDB[h.jk]||0,pr2=JDB[l.jockey]||JDB[l.jockey.replace(/\s/g,'')]||0,diff=cr-pr2;if(diff>=2){s+=5;f['乗替']={v:'↑'+h.jk,c:'g'}}else if(diff===1){s+=2;f['乗替']={v:'↑'+h.jk,c:'g'}}else if(diff===-1){s-=2;f['乗替']={v:'↓'+h.jk,c:'b'}}else if(diff<=-2){s-=4;f['乗替']={v:'↓'+h.jk,c:'b'}}else{f['乗替']={v:'→'+h.jk,c:'n'}}}}
+// 乗り替わり（データ記録のみ、スコア影響なし）
+if(h.jk&&l?.jockey){const pn=l.jockey.replace(/\s/g,''),cn=h.jk.replace(/\s/g,'');const same=pn===cn||cn.includes(pn)||pn.includes(cn);if(!same){const cr=JDB[h.jk]||0,pr2=JDB[l.jockey]||JDB[l.jockey.replace(/\s/g,'')]||0,diff=cr-pr2;if(diff>=2){f['乗替']={v:'↑'+h.jk,c:'g'}}else if(diff>=1){f['乗替']={v:'↑'+h.jk,c:'g'}}else if(diff<=-2){f['乗替']={v:'↓'+h.jk,c:'b'}}else if(diff===-1){f['乗替']={v:'↓'+h.jk,c:'b'}}else{f['乗替']={v:'→'+h.jk,c:'n'}}}}
 
 // 左右回り適性
-if(raceDir&&h.prev?.length>0){const sd=h.prev.filter(p=>p.dir===raceDir),od=h.prev.filter(p=>p.dir&&p.dir!==raceDir);if(sd.length>0){const bs=Math.min(...sd.map(p=>p.fin)),as=sd.reduce((a,p)=>a+p.fin,0)/sd.length,bo=od.length>0?Math.min(...od.map(p=>p.fin)):99,ao=od.length>0?od.reduce((a,p)=>a+p.fin,0)/od.length:99;if(bs<=3&&as<ao-1){s+=fw('回り',5);f['回り']={v:raceDir+'得意',c:'g'}}else if(bs<=5){s+=fw('回り',2);f['回り']={v:raceDir+'○',c:'n'}}else if(od.length>0&&as>ao+2){s-=3;f['回り']={v:raceDir+'苦手',c:'b'}}else{f['回り']={v:raceDir+'経験有',c:'n'}}}else if(h.prev.some(p=>p.dir)){f['回り']={v:raceDir+'未経験',c:'b'}}}
+if(raceDir&&h.prev?.length>0){const sd=h.prev.filter(p=>p.dir===raceDir),od=h.prev.filter(p=>p.dir&&p.dir!==raceDir);if(sd.length>0){const bs=Math.min(...sd.map(p=>p.fin)),as=sd.reduce((a,p)=>a+p.fin,0)/sd.length,bo=od.length>0?Math.min(...od.map(p=>p.fin)):99,ao=od.length>0?od.reduce((a,p)=>a+p.fin,0)/od.length:99;if(bs<=3&&as<ao-1){s+=fw('回り',3);f['回り']={v:raceDir+'得意',c:'g'}}else if(bs<=5){s+=fw('回り',2);f['回り']={v:raceDir+'○',c:'n'}}else if(od.length>0&&as>ao+2){s-=3;f['回り']={v:raceDir+'苦手',c:'b'}}else{f['回り']={v:raceDir+'経験有',c:'n'}}}else if(h.prev.some(p=>p.dir)){f['回り']={v:raceDir+'未経験',c:'b'}}}
 
-// 馬場状態適性
-if(isHeavy||isSlight){const hr=h.prev?.filter(p=>p.cond==='重'||p.cond==='不良')||[],sr=h.prev?.filter(p=>p.cond==='稍重')||[],tr=isHeavy?hr:[...hr,...sr];if(tr.length>0){const bh=Math.min(...tr.map(p=>p.fin));if(bh<=3){s+=6;f['馬場']={v:(isHeavy?'重':'稍重')+'得意',c:'g'}}else if(bh<=5){s+=3;f['馬場']={v:(isHeavy?'重':'稍重')+'○',c:'n'}}else{s-=2;f['馬場']={v:(isHeavy?'重':'稍重')+'苦手',c:'b'}}}else{if(isHeavy){s-=2;f['馬場']={v:'重未経験',c:'b'}}else{f['馬場']={v:'稍重未経験',c:'n'}}}}
+// 馬場状態適性（段階制: 良→稍重→重→不良）
+if(h.prev?.length>0){
+  const condOrder=['良','稍重','重','不良'];
+  const raceCondIdx=condOrder.indexOf(raceCond);
+  if(raceCondIdx>=0){
+    let bestMatchPts=-1;let bestMatchLabel='';
+    h.prev.forEach(p=>{
+      if(!p.cond)return;
+      const pIdx=condOrder.indexOf(p.cond);if(pIdx<0)return;
+      const diff=Math.abs(raceCondIdx-pIdx);
+      let pts=diff===0?5:diff===1?3:diff===2?1:0;
+      if(pts>bestMatchPts){bestMatchPts=pts;bestMatchLabel=p.cond+(diff===0?'(完全一致)':diff===1?'(一段階差)':diff===2?'(二段階差)':'(三段階差)')}
+    });
+    if(bestMatchPts>=0){
+      s+=bestMatchPts;
+      const cls=bestMatchPts>=5?'g':bestMatchPts>=3?'n':'b';
+      f['馬場']={v:bestMatchLabel,c:cls};
+    }
+  }
+}
 
 // 年齢・性別補正
 if(h.age){const is3=h.age===3,isOld=h.age>=7,mixed=inf.cls?inf.cls.includes('混合')||!inf.cls.includes('3歳'):true;if(is3&&mixed){s+=3;f['年齢']={v:'3歳(混合)',c:'g'}}else if(isOld){s-=2;f['年齢']={v:h.age+'歳',c:'b'}}}
@@ -738,12 +764,15 @@ function genBet(scored,raceInfo,marketOdds){
   if(headCount<=6){raceQuality.score-=30;raceQuality.reasons.push('少頭数（'+headCount+'頭）')}
   else if(headCount<=8){raceQuality.score-=15;raceQuality.reasons.push('小頭数（'+headCount+'頭）')}
 
-  // 断然1番人気（単勝2倍未満）：的中しても配当が低い
+  // 断然1番人気（単勝2倍未満）：的中しても配当が低い（オッズデータがある場合のみ）
   const favHorse=scored.slice().sort((a,b)=>(a.odds||999)-(b.odds||999))[0];
   const favOdds=favHorse?.odds||99;
-  if(favOdds<1.5){raceQuality.score-=40;raceQuality.reasons.push('断然人気('+favOdds+'倍)')}
-  else if(favOdds<2.0){raceQuality.score-=25;raceQuality.reasons.push('強い1番人気('+favOdds+'倍)')}
-  else if(favOdds<2.5){raceQuality.score-=10;raceQuality.reasons.push('1番人気('+favOdds+'倍)')}
+  const hasOddsData=scored.some(h=>h.odds&&h.odds>0);
+  if(hasOddsData){
+    if(favOdds<1.5){raceQuality.score-=40;raceQuality.reasons.push('断然人気('+favOdds+'倍)')}
+    else if(favOdds<2.0){raceQuality.score-=25;raceQuality.reasons.push('強い1番人気('+favOdds+'倍)')}
+    else if(favOdds<2.5){raceQuality.score-=10;raceQuality.reasons.push('1番人気('+favOdds+'倍)')}
+  }
 
   // 上位2頭のスコア差が小さい（甲乙つけがたい混戦）
   const top2=scored.slice(0,2);
@@ -765,9 +794,9 @@ function genBet(scored,raceInfo,marketOdds){
   // レース質判定：-40以下で見送り
   const poorRace=raceQuality.score<=-40;
 
-  // オッズ3倍未満の馬を除外
-  const excluded=scored.filter(h=>h.odds&&h.odds<3.0);
-  const eligible=scored.filter(h=>!h.odds||h.odds>=3.0);
+  // オッズ3倍未満の馬を除外（オッズデータがある場合のみ）
+  const excluded=hasOddsData?scored.filter(h=>h.odds&&h.odds<3.0):[];
+  const eligible=hasOddsData?scored.filter(h=>!h.odds||h.odds>=3.0):scored;
   const useEligible=eligible.length>=2?eligible:scored.filter(h=>h!==favHorse);
 
   function stableScore(h){
@@ -803,8 +832,8 @@ function genBet(scored,raceInfo,marketOdds){
   const STRONG_F=['前走','着差','蓄積','安定','上がり','距離'];
   function countG(h){return STRONG_F.filter(k=>h.f?.[k]?.c==='g').length}
   const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
-  // 軸馬: スコア1位（ns80以上・人気1〜3番手を優先）
-  let A=scored.find(h=>h.ns>=80&&h.pop&&h.pop<=3)||scored.find(h=>h.ns>=80&&h.pop&&h.pop<=5)||null;
+  // 軸馬: スコア1位（ns80以上。人気データがあれば1〜3番手を優先）
+  let A=scored.find(h=>h.ns>=80&&h.pop&&h.pop<=3)||scored.find(h=>h.ns>=80&&h.pop&&h.pop<=5)||scored.find(h=>h.ns>=80)||null;
   let B=scored.filter(h=>h!==A).find(h=>h.ns>=50)||null;
   let C=scored.filter(h=>h!==A&&h!==B).find(h=>h.ns>=50)||null;
 
@@ -813,12 +842,13 @@ function genBet(scored,raceInfo,marketOdds){
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
   const top3=scored.slice(0,3);
   const top3diff=top3.length>=3?(top3[0].ns-top3[2].ns):99;
-  const allPop4Plus=top3.every(h=>h.pop&&h.pop>=4);
+  const hasPop=top3.some(h=>h.pop&&h.pop>0);
+  const allPop4Plus=hasPop&&top3.every(h=>h.pop&&h.pop>=4);
 
-  // 3パターン判定
-  const isAxisClear=A&&A.ns>=85&&A.pop&&A.pop<=2&&nsDiff>=10;
-  const isMixedRace=top3diff<=5&&allPop4Plus;
-  const isStandard=!isAxisClear&&!isMixedRace&&A&&A.ns>=80&&A.pop&&A.pop<=3;
+  // 3パターン判定（人気データがない場合はスコア差のみで判定）
+  const isAxisClear=A&&A.ns>=85&&(A.pop?A.pop<=2:true)&&nsDiff>=10;
+  const isMixedRace=top3diff<=5&&(hasPop?allPop4Plus:true);
+  const isStandard=!isAxisClear&&!isMixedRace&&A&&A.ns>=80&&(A.pop?A.pop<=3:true);
 
   // 見送り判定
   let budgetOver=false;
@@ -827,7 +857,7 @@ function genBet(scored,raceInfo,marketOdds){
   }
   let skipRecommended=topNs<70||budgetOver;
   if(!isAxisClear&&!isMixedRace&&!isStandard)skipRecommended=true;
-  if(!isMixedRace&&A&&A.pop&&A.pop>=4)skipRecommended=true;
+  if(!isMixedRace&&A&&A.pop&&A.pop>=4&&hasOddsData)skipRecommended=true;
 
   // 信頼度
   const axisG=A?countG(A):0;
@@ -2127,7 +2157,7 @@ function downloadCSV(){
 
 function downloadAnalysisCSV(){
   const BOM='\uFEFF';
-  const header=['日付','競馬場','レース','距離','コース','馬場','頭数','クラス','馬番','馬名','単勝オッズ','人気','スコア(ns)','F_前走','F_上がり','F_距離','F_血統','F_騎手','F_安定','F_着差','F_間隔','F_蓄積','F_昇降級','F_回り','F_馬場','役割(A/B/C)','実際着順','3着以内','信頼度','レース質スコア','見送り','投資額','回収額','損益','回収率'];
+  const header=['日付','競馬場','レース','距離','コース','馬場','頭数','クラス','馬番','馬名','単勝オッズ','人気','スコア(ns)','F_前走','F_上がり','F_距離','F_血統','F_騎手','F_安定','F_トレンド','F_着差','F_間隔','F_蓄積','F_昇降級','F_回り','F_馬場','役割(A/B/C)','実際着順','3着以内','信頼度','レース質スコア','見送り','投資額','回収額','損益','回収率'];
   const rows=[];
   RACES.forEach(r=>{
     const snap=r.result?.analysisSnapshot;
@@ -2141,7 +2171,7 @@ function downloadAnalysisCSV(){
         snap.raceInfo.headCount||'',snap.raceInfo.cls||'',
         h.num,h.name||'',h.odds||'',h.pop||'',h.ns||'',
         getF('前走'),getF('上がり'),getF('距離'),getF('血統'),getF('騎手'),getF('安定'),
-        getF('着差'),getF('間隔'),getF('蓄積'),
+        getF('トレンド'),getF('着差'),getF('間隔'),getF('蓄積'),
         h.factors?.['昇級']?'b(昇級)':h.factors?.['降級']?'g(降級)':'',
         getF('回り'),getF('馬場'),role,
         h.actualRank||'',h.inTop3?'1':'0',
@@ -2219,7 +2249,7 @@ function importAnalysisCSV(text,fileName){
   }
 
   let imported=0,skipped=0;
-  const factorKeys=['前走','上がり','距離','血統','騎手','安定','着差','間隔','蓄積','回り','馬場'];
+  const factorKeys=['前走','上がり','距離','血統','騎手','安定','トレンド','着差','間隔','蓄積','回り','馬場'];
 
   for(const [raceKey,rd] of raceMap){
     const {date,venue,raceStr,rows}=rd;
@@ -2560,6 +2590,13 @@ function renderDetail(id){
       <span style="font-size:12px;color:var(--dim)">払戻額</span>
       <input type="number" id="payIn" placeholder="0" style="width:80px;padding:5px;border:1px solid var(--bdr);background:var(--p2);font-size:13px">
       <span style="font-size:12px;color:var(--dim)">円</span>
+    </div>
+    <div style="margin-top:8px;padding:10px;background:var(--p2);border:1px solid var(--bdr);border-radius:4px">
+      <div style="font-size:12px;font-weight:700;color:var(--blu);margin-bottom:6px">単勝オッズ・人気（任意）</div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px">馬番ごとにオッズと人気を記録します。形式：馬番=オッズ,人気（1行1頭）</div>
+      <textarea id="oddsPopIn" rows="3" placeholder="例:&#10;1=3.5,2&#10;5=12.8,6&#10;8=1.8,1" style="min-height:60px;font-size:13px"></textarea>
+    </div>
+    <div style="margin-top:8px">
       <button class="btn btn-b" onclick="doSaveResult('${id}')" id="saveResBtn">結果を保存</button>
     </div>`;
     // Auto-parse on input
@@ -2768,6 +2805,17 @@ function doSaveResult(id){
   const pr=parseResult(ta.value,r.scored);
   if(pr.top3.length<3){alert('着順を読み取れませんでした。\n1着〜3着の馬番が含まれるテキストを貼り付けてください。');return}
   const pay=parseInt(document.getElementById('payIn')?.value)||pr.payout||0;
+  // オッズ・人気を手動入力から取得して馬データに反映
+  const opIn=document.getElementById('oddsPopIn');
+  if(opIn&&opIn.value.trim()){
+    opIn.value.trim().split('\n').forEach(line=>{
+      const m=line.match(/^(\d+)\s*[=＝]\s*([\d.]+)\s*[,，]\s*(\d+)/);
+      if(!m)return;
+      const num=+m[1],odds=parseFloat(m[2]),pop=+m[3];
+      const horse=r.scored?.find(h=>h.num===num);
+      if(horse){horse.odds=odds;horse.pop=pop}
+    });
+  }
   const reasons=analyzeLoss(r,pr.top3);
   r.result={
     top3:pr.top3.map(String),
