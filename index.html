@@ -918,7 +918,7 @@ function genBet(scored,raceInfo,marketOdds){
       }
 
     }else{
-      // ===== オッズ未入力: 従来通りスコアのみで生成 =====
+      // ===== オッズ未入力: スコアのみで生成（オッズフィルタなし） =====
       const partners=[B,C].filter(Boolean);
       const extra=himoPool.filter(h=>h!==A&&h!==B&&h!==C).slice(0,1);
       const allPartners=[...partners,...extra].slice(0,3);
@@ -926,20 +926,15 @@ function genBet(scored,raceInfo,marketOdds){
       if(allPartners.length>=2){
         allPartners.forEach(p=>{
           tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],est:eU(A,p),
-            actualOdds:null,grade:'?',gradeLabel:'オッズ未入力',priority:99,
+            actualOdds:null,grade:'-',gradeLabel:'※オッズ未入力',priority:99,
             reason:A.num+'番─'+p.num+'番が1・2着で的中'});
         });
       }else if(allPartners.length===1){
         tickets.push({type:'ワイド',desc:A.num+'─'+allPartners[0].num,amount:100,horses:[A,allPartners[0]],est:eW(A,allPartners[0]),
-          actualOdds:null,grade:'?',gradeLabel:'オッズ未入力',priority:99,
+          actualOdds:null,grade:'-',gradeLabel:'※オッズ未入力',priority:99,
           reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
       }
-      // 理論オッズで最低ラインチェック
-      tickets=tickets.filter(tk=>{
-        if(tk.type==='馬連'&&tk.est<4.0)return false;
-        if(tk.type==='ワイド'&&tk.est<2.5)return false;
-        return true;
-      });
+      // オッズ未入力時はフィルタリングしない（スコアのみで判定済み）
     }
   }
   if(!skipRecommended&&tickets.length===0)skipRecommended=true;
@@ -2082,24 +2077,26 @@ function renderDetail(id){
   if(b.tickets?.length>0){
     b.tickets.forEach(tk=>{
       const hasActual=tk.actualOdds!=null;
-      const dispOdds=hasActual?tk.actualOdds:tk.est;
-      const oddsLabel=hasActual?tk.actualOdds.toFixed(1)+'倍':'≈'+tk.est.toFixed(1)+'倍(理論)';
+      // オッズ未入力時は空欄表示（理論オッズを表示しない）
+      const oddsLabel=hasActual?tk.actualOdds.toFixed(1)+'倍':'--';
+      const payoutLabel=hasActual?'的中時≈'+Math.round(tk.actualOdds*tk.amount/100*100).toLocaleString()+'円':'';
       // グレード別の色
       const gradeStyle=tk.grade==='◎'?{col:'var(--grn)',bg:'rgba(45,106,48,.06)',bdr:'var(--grn)'}
         :tk.grade==='○'?{col:'var(--gld)',bg:'rgba(184,134,11,.06)',bdr:'var(--gld)'}
+        :tk.grade==='△'?{col:'var(--blu)',bg:'rgba(26,68,136,.06)',bdr:'var(--blu)'}
         :{col:'var(--dim)',bg:'var(--p2)',bdr:'var(--bdr)'};
       h+=`<div style="background:${gradeStyle.bg};border:2px solid ${gradeStyle.bdr};padding:10px 14px;border-radius:6px;margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-size:14px;font-weight:900;color:${gradeStyle.col}">${tk.grade||'?'}</span>
+          <span style="font-size:14px;font-weight:900;color:${gradeStyle.col}">${hasActual?(tk.grade||'?'):''}</span>
           <span style="font-size:12px;font-weight:900;color:${gradeStyle.col};background:rgba(0,0,0,.05);padding:2px 8px;border-radius:4px">${tk.type} ${tk.amount}円</span>
           <span style="font-size:20px;font-weight:900">${tk.desc}</span>
           <span style="margin-left:auto;text-align:right">
             <div style="font-size:15px;font-weight:900;color:${gradeStyle.col}">${oddsLabel}</div>
-            <div style="font-size:11px;color:var(--dim)">的中時≈${Math.round(dispOdds*tk.amount/100*100).toLocaleString()}円</div>
+            ${payoutLabel?`<div style="font-size:11px;color:var(--dim)">${payoutLabel}</div>`:''}
           </span>
         </div>
         <div style="font-size:11px;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap">
-          <span style="color:${gradeStyle.col};font-weight:700">${tk.gradeLabel||''}</span>
+          <span style="color:${hasActual?gradeStyle.col:'var(--dim)'};font-weight:700">${tk.gradeLabel||''}</span>
           <span style="color:var(--dim)">${tk.horses.map(h=>h.name).join(' × ')}</span>
         </div>
       </div>`;
@@ -2108,10 +2105,12 @@ function renderDetail(id){
     h+=`<div style="padding:6px 12px;background:rgba(26,68,136,.06);border:1px solid var(--blu);font-size:12px;border-radius:4px">
       投資合計：<b>${b.totalInv}円</b>（${b.tickets.map(t=>t.type+' '+t.amount+'円').join('＋')}）
     </div>`;
-    // 凡例
-    h+=`<div style="font-size:10px;color:var(--lt);line-height:1.5;margin-top:6px">
-      馬連: ◎10倍↑高配当 ○4〜9.9倍堅実 4倍未満除外 ／ ワイド: ◎3倍↑推奨 ○2.5〜2.9倍条件付き 2.5倍未満除外
-    </div>`;
+    // 凡例（オッズ入力済みの場合のみ表示）
+    if(b.tickets.some(tk=>tk.actualOdds!=null)){
+      h+=`<div style="font-size:10px;color:var(--lt);line-height:1.5;margin-top:6px">
+        馬連: ◎10倍以上推奨 ／ ワイド: ◎3倍以上推奨・○2.5〜2.9倍条件付き ／ 単勝: △軸馬10倍以上
+      </div>`;
+    }
   }
   // 選出理由
   if(b.best?.horses?.length>0){
