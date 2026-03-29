@@ -1468,6 +1468,7 @@ JRAの<b>レース結果ページ</b>を1レースずつ、または複数レー
 <textarea id="bulkIn" rows="8" placeholder="JRAレース結果ページをコピーして貼り付け&#10;&#10;複数レース分をまとめて貼り付けてもOK&#10;（各レースの区切りは自動検出します）"></textarea>
 <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
 <button class="btn btn-b" onclick="doBulkImport()">一括取り込み</button>
+<button class="btn-s" onclick="downloadHorseDBCSV()" style="padding:6px 16px">📥 馬DBデータCSV出力</button>
 <span id="bulkStatus" style="font-size:12px;color:var(--dim)"></span>
 </div>
 <div id="bulkPreview" style="margin-top:8px"></div>
@@ -2171,6 +2172,61 @@ function downloadFullCSV(){
   a.click();
   URL.revokeObjectURL(url);
   alert('CSV出力完了: '+rows.length+'行（'+sorted.filter(r=>(r.scored?.length>0)||(r.result?.analysisSnapshot?.horses?.length>0)).length+'レース）');
+}
+
+// === 馬DBデータCSV出力 ===
+function downloadHorseDBCSV(){
+  const BOM='\uFEFF';
+  const header=['馬名','競馬場','距離','コース','馬場','着順','頭数','着差','上がりタイム','上がり順位',
+    '通過順位','騎手','斤量','馬体重','レース格','日付'];
+  const rows=[];
+  Object.entries(HORSE_STORE).forEach(([name,runs])=>{
+    if(!runs||!Array.isArray(runs))return;
+    runs.forEach(run=>{
+      // 通過順位
+      let pos='';
+      if(run.positions&&Array.isArray(run.positions))pos=run.positions.join('-');
+
+      // 斤量（bodyWeightから分離できないためそのまま）
+      // bodyWeightは "490(+8)" のような形式
+      let bw='',bwChange='';
+      if(run.bodyWeight){
+        const m=String(run.bodyWeight).match(/(\d+)\(([+\-\d]+)\)/);
+        if(m){bw=m[1];bwChange=m[2]}
+        else bw=run.bodyWeight;
+      }
+
+      // 上がり順位は保存されていないため空
+      rows.push([
+        name,
+        run.venue||'',
+        run.dist||'',
+        run.surface||'',
+        run.cond||'',
+        run.rank||'',
+        run.runners||'',
+        run.gap!=null?run.gap:'',
+        run.last3f||'',
+        '',
+        pos,
+        run.jockey||'',
+        run.weight||'',
+        bw||(run.bodyWeight||''),
+        run.cls||'',
+        run.date||''
+      ]);
+    });
+  });
+  if(rows.length===0){alert('馬DBにデータがありません。\nHORSE_STORE: '+Object.keys(HORSE_STORE).length+'頭');return}
+  const csv=BOM+[header,...rows].map(row=>row.map(cell=>{const s=String(cell==null?'':cell);return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='horse_db_'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  alert('馬DBデータ出力完了: '+rows.length+'走（'+Object.keys(HORSE_STORE).length+'頭）');
 }
 
 // === CSV IMPORT / RESTORE ===
