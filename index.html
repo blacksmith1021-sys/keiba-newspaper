@@ -245,6 +245,42 @@ function saveSettings(s){
   if(_dirHandle)_scheduleWrite('settings.json',json);
 }
 
+// --- 保存ステータス表示 ---
+let _saveStatusTimer=null;
+function showSaveStatus(msg,type){
+  let el=document.getElementById('saveStatus');
+  if(!el){
+    el=document.createElement('div');
+    el.id='saveStatus';
+    el.style.cssText='position:fixed;top:0;left:0;right:0;text-align:center;padding:6px 16px;font-size:12px;font-weight:700;z-index:9999;transition:opacity .3s';
+    document.body.prepend(el);
+  }
+  el.style.opacity='1';
+  el.style.background=type==='ok'?'var(--grn)':type==='err'?'var(--red)':'var(--gld)';
+  el.style.color='#fff';
+  el.textContent=msg;
+  if(_saveStatusTimer)clearTimeout(_saveStatusTimer);
+  if(type!=='saving'){
+    _saveStatusTimer=setTimeout(()=>{el.style.opacity='0'},3000);
+  }
+}
+
+// --- 自動保存（分析・結果保存後に呼び出す） ---
+async function autoSaveAll(){
+  if(!_dirHandle){return} // フォルダ未接続時はlocalStorageのみ（saveR等で保存済み）
+  showSaveStatus('💾 保存中...','saving');
+  try{
+    const rOk=await _fsWrite('races.json',JSON.stringify(RACES));
+    const hOk=await _fsWrite('horse_store.json',JSON.stringify(HORSE_STORE));
+    const sOk=await _fsWrite('settings.json',JSON.stringify(loadSettings()));
+    if(rOk&&hOk&&sOk){showSaveStatus('✅ 保存完了','ok')}
+    else{showSaveStatus('⚠️ 一部保存失敗','err')}
+  }catch(e){
+    console.error('autoSaveAll error:',e);
+    showSaveStatus('⚠️ 保存失敗・手動保存してください','err');
+  }
+}
+
 let RACES=loadR();
 // 起動時クリーンアップ: 取込データの肥大化を防止
 (function cleanupRaces(){
@@ -1831,6 +1867,7 @@ function doAnalyze(){
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
   const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v3.0.0',_marketOdds:hasOdds?marketOdds:undefined};
   RACES.unshift(race);saveR(RACES);
+  autoSaveAll(); // 分析完了後に自動保存
   // テキストエリアをクリア
   document.getElementById('raceIn').value='';
   ['oddsTansho','oddsWakuren','oddsUmaren','oddsWide','oddsUmatan','oddsSanrenpuku','oddsSanrentan'].forEach(eid=>{const e=document.getElementById(eid);if(e)e.value=''});
@@ -2542,7 +2579,9 @@ function doSaveResult(id){
   };
   // 検証用スナップショット（フェーズ2でのファクター検証に使用）
   try{r.result.analysisSnapshot=buildAnalysisSnapshot(r)}catch(e){console.warn('snapshot生成失敗:',e)}
-  saveR(RACES);renderDetail(id);
+  saveR(RACES);
+  autoSaveAll(); // 結果保存後に自動保存
+  renderDetail(id);
   updatePhaseBanner();
 }
 
