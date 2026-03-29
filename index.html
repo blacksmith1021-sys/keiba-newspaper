@@ -446,30 +446,46 @@ h.prev.push(pr)}
 // 日付の新しい順にソート（前走が[0]になるように）
 h.prev.sort((a,b)=>b.dateKey-a.dateKey);
 if(h.name&&h.num)r.horses.push(h)}
-// === オッズデータ解析（貼り付けテキストにオッズページが含まれていれば自動取得） ===
+// === オッズデータ解析（JRAオッズページ形式: 軸馬番号行＋相手馬番号\tオッズ行） ===
 r._marketOdds={umaren:{},wide:{}};
-// 馬連オッズ: "1 - 2 15.5" or "1-2\t15.5" or "1\t2\t15.5" パターン
-const umarenRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)/g;
-let um;while((um=umarenRe.exec(t))!==null){
-  const a=Math.min(+um[1],+um[2]),b=Math.max(+um[1],+um[2]);
-  r._marketOdds.umaren[a+'-'+b]=parseFloat(um[3].replace(',',''));
-}
-// ワイドオッズ: "1 - 2 4.5 - 6.8" (下限-上限) or "1-2\t4.5" パターン
-const wideRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)\s*[-ー－]\s*([\d,]+\.\d)/g;
-let wm;while((wm=wideRe.exec(t))!==null){
-  const a=Math.min(+wm[1],+wm[2]),b=Math.max(+wm[1],+wm[2]);
-  // ワイドは下限と上限の中央値を使用
-  r._marketOdds.wide[a+'-'+b]=Math.round((parseFloat(wm[3].replace(',',''))+parseFloat(wm[4].replace(',','')))/2*10)/10;
-}
-// ワイド単一値パターン: "1 - 2 4.5"（上限なし）
-if(Object.keys(r._marketOdds.wide).length===0){
-  const wideSingleRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)(?!\s*[-ー－]\s*\d)/g;
-  let ws;while((ws=wideSingleRe.exec(t))!==null){
-    const a=Math.min(+ws[1],+ws[2]),b=Math.max(+ws[1],+ws[2]);
-    if(!r._marketOdds.umaren[a+'-'+b]){// 馬連と重複しないものだけ
-      r._marketOdds.wide[a+'-'+b]=parseFloat(ws[3].replace(',',''));
+// 馬連オッズ（馬番順）〜 ワイドオッズ（馬番順）の間を馬連として解析
+// ワイドオッズ（馬番順）以降をワイドとして解析
+const umarenStart=t.indexOf('馬連オッズ');
+const wideStart=t.indexOf('ワイドオッズ');
+function parseBlockOdds(block,isWide){
+  const lines=block.split('\n').map(l=>l.trim()).filter(Boolean);
+  let axis=0;const result={};
+  for(const line of lines){
+    // 軸馬番号行: 数字のみの行
+    if(/^\d{1,2}$/.test(line)){axis=parseInt(line);continue}
+    if(!axis)continue;
+    if(isWide){
+      // ワイド: "相手番号\tオッズ下限\t-\tオッズ上限" → 下限を使用
+      const mw=line.match(/^(\d{1,2})\s+([\d,]+\.\d)\s*[-ー－]\s*([\d,]+\.\d)/);
+      if(mw){const partner=parseInt(mw[1]);const lo=parseFloat(mw[2].replace(/,/g,''));
+        const a=Math.min(axis,partner),b=Math.max(axis,partner);
+        result[a+'-'+b]=lo;continue}
+      // ワイド単一値: "相手番号\tオッズ"
+      const mws=line.match(/^(\d{1,2})\s+([\d,]+\.\d)/);
+      if(mws){const partner=parseInt(mws[1]);const v=parseFloat(mws[2].replace(/,/g,''));
+        const a=Math.min(axis,partner),b=Math.max(axis,partner);
+        result[a+'-'+b]=v}
+    }else{
+      // 馬連: "相手番号\tオッズ"
+      const mu=line.match(/^(\d{1,2})\s+([\d,]+\.\d)/);
+      if(mu){const partner=parseInt(mu[1]);const v=parseFloat(mu[2].replace(/,/g,''));
+        const a=Math.min(axis,partner),b=Math.max(axis,partner);
+        result[a+'-'+b]=v}
     }
   }
+  return result;
+}
+if(umarenStart>=0){
+  const uEnd=wideStart>=0?wideStart:t.length;
+  r._marketOdds.umaren=parseBlockOdds(t.substring(umarenStart,uEnd),false);
+}
+if(wideStart>=0){
+  r._marketOdds.wide=parseBlockOdds(t.substring(wideStart),true);
 }
 return r}
 
@@ -2029,7 +2045,7 @@ function renderDetail(id){
     h+=`<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:8px">
       <tr style="background:var(--ink);color:var(--p)"><th style="padding:4px 8px;text-align:left">買い目</th><th style="padding:4px 8px">理論オッズ</th><th style="padding:4px 8px">実際オッズ</th><th style="padding:4px 8px">乖離率</th><th style="padding:4px 8px">判定</th></tr>`;
     b.tickets.forEach((tk,ti)=>{
-      const nums=tk.horses.map(x=>x.num);
+      const nums=tk.horses.map(x=>x.num).sort((a,b)=>a-b);
       const savedOdds=r._oddsInput?.[tk.type+'_'+nums.join('-')]||'';
       const theoOdds=tk.est; // genBetで計算済みの理論オッズ
       const actualOdds=savedOdds?parseFloat(savedOdds):0;
