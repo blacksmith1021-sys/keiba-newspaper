@@ -1887,7 +1887,7 @@ function renderList(){
   if(needSave)saveR(RACES);
   document.getElementById('countBadge').textContent='('+RACES.length+')';
   let h='';
-  if(!RACES.length){h='<div style="text-align:center;padding:40px;color:var(--dim)">レースデータなし</div>';document.getElementById('vList').innerHTML=h;return}
+  if(!RACES.length){h='<div style="text-align:center;padding:40px;color:var(--dim)">レースデータなし</div>';h+=`<div style="text-align:center;margin-top:12px"><button class="btn btn-b" onclick="triggerCSVImport()" style="padding:10px 28px;font-size:15px;background:var(--grn)">📂 検証データCSV取込</button></div>`;document.getElementById('vList').innerHTML=h;return}
   
   // 日付グループ化
   const sorted=[...RACES].sort((a,b)=>{const ka=a.sortKey||a.id;const kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0});
@@ -2019,16 +2019,12 @@ function renderList(){
     h+=`<div style="text-align:center;padding:30px;color:var(--dim)">データなし</div>`;
   }
 
-  // CSV取込ボタンは常に表示
-  h+=`<div style="text-align:center;margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-    <button class="btn-s" onclick="triggerCSVImport()" style="padding:8px 24px;color:var(--grn);font-size:14px">📂 検証CSV取込・復元</button>
-  </div>`;
-
   if(RACES.length>0){
-    h+=`<div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    h+=`<div style="text-align:center;margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button class="btn-s" onclick="recalcAll()" style="padding:6px 20px;color:var(--blu)">🔄 全レース再分析</button>
       <button class="btn-s" onclick="downloadCSV()" style="padding:6px 20px">📥 CSVダウンロード</button>
-      <button class="btn-s" onclick="downloadAnalysisCSV()" style="padding:6px 20px;color:var(--blu)">🔬 検証データCSV</button>
+      <button class="btn-s" onclick="triggerCSVImport()" style="padding:6px 20px;color:var(--grn)">📂 検証データCSV取込</button>
+      <button class="btn-s" onclick="downloadAnalysisCSV()" style="padding:6px 20px;color:var(--blu)">🔬 検証データCSV出力</button>
       <button class="btn-s" onclick="if(confirm('保存データを全て削除しますか？（元に戻せません）')){RACES=[];saveR(RACES);renderList()}" style="padding:6px 20px;color:var(--red)">🗑 全データ削除</button>
     </div>`;
   }
