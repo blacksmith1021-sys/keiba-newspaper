@@ -2527,6 +2527,13 @@ function renderDetail(id){
   }
   if(!b.tickets?.length&&!b.best)h+=`<div style="color:var(--dim);font-size:13px">候補なし</div>`;
   h+=`</div>`;
+
+  // === 着順予想コメント ===
+  h+=`<div class="pnl"><h3 style="color:var(--red);display:flex;align-items:center;justify-content:space-between">📝 着順予想
+    <button class="btn-s" id="genPredBtn" onclick="generatePrediction('${id}')" style="font-size:11px;padding:4px 12px">${r._prediction?'🤖 着順予想を再生成':'🤖 着順予想を生成'}</button>
+  </h3>`;
+  h+=`<div id="predictionArea"></div></div>`;
+
   } // end if(!isPast)
   // Result
   h+=`<div class="pnl"><h3 class="b">📝 レース結果</h3>`;
@@ -2694,6 +2701,8 @@ function renderDetail(id){
   h+=`</div>`;
   h+=`<div style="text-align:right"><button class="btn-s" onclick="if(confirm('削除しますか？')){deleteRace('${id}')}">削除</button></div>`;
   document.getElementById('vDetail').innerHTML=h;
+  // 既存の予想コメントがあれば表示
+  if(r._prediction)setTimeout(()=>renderPredictionArea(r),0);
   }catch(e){document.getElementById('vDetail').innerHTML='<div class="pnl" style="color:var(--red)"><b>表示エラー:</b><pre>'+e.message+'\n'+e.stack+'</pre></div>'}
 }
 
@@ -2769,6 +2778,163 @@ function doSaveResult(id){
 function resetResult(id){
   const r=RACES.find(x=>x.id===id);if(!r)return;
   r.result=null;saveR(RACES);renderDetail(id);
+}
+
+// === AI着順予想コメント生成 ===
+function buildHorseDataForAI(r){
+  const inf=r.info;const top5=(r.scored||[]).slice(0,5);
+  const raceCond=inf.cond||'良';
+  const condOrder=['良','稍重','重','不良'];
+  return top5.map((h,i)=>{
+    const l=h.prev?.[0];const l2=h.prev?.[1];
+    const lines=[`【${i+1}位】${h.num}番 ${h.name}（スコア${h.ns}）`];
+    // 前走
+    if(l){
+      lines.push(`前走: ${l.venue||''}${l.dist||''}m${l.surface||''} ${l.cond||''} ${l.fin}着/${l.run}頭`);
+      if(l.gap!=null)lines.push(`着差: ${l.gap===0?'1着(勝利)':l.gap+'秒差'}`);
+      if(l.f3)lines.push(`上がり3F: ${l.f3}秒`);
+      if(l.pos?.length>=2)lines.push(`通過順位: ${l.pos.join('-')}`);
+    }
+    // 2走前
+    if(l2)lines.push(`2走前: ${l2.venue||''}${l2.dist||''}m${l2.surface||''} ${l2.fin}着/${l2.run}頭`);
+    // トレンド
+    if(l&&l2)lines.push(`トレンド: ${l2.fin}着→${l.fin}着(${l.fin<l2.fin?'改善':l.fin===l2.fin?'横ばい':'悪化'})`);
+    // 距離比較
+    if(l?.dist&&inf.dist){
+      const dd=inf.dist-l.dist;
+      if(dd>0)lines.push(`距離変化: 前走より${dd}m延長`);
+      else if(dd<0)lines.push(`距離変化: 前走より${Math.abs(dd)}m短縮`);
+      else lines.push(`距離変化: 前走と同距離`);
+    }
+    // 馬場比較
+    if(l?.cond&&raceCond){
+      const ci=condOrder.indexOf(raceCond),pi=condOrder.indexOf(l.cond);
+      if(ci>=0&&pi>=0&&ci!==pi)lines.push(`馬場変化: 前走${l.cond}→今回${raceCond}(${Math.abs(ci-pi)}段階差)`);
+      else if(ci>=0&&pi>=0)lines.push(`馬場: 前走と同じ${raceCond}`);
+    }
+    // 体重
+    if(h.wc!=null)lines.push(`馬体重変化: ${h.wc>=0?'+':''}${h.wc}kg`);
+    // 間隔
+    if(h.f?.['間隔'])lines.push(`出走間隔: ${h.f['間隔'].v}`);
+    // 斤量
+    if(h.imp)lines.push(`斤量: ${h.imp}kg`);
+    // コース一致
+    if(l?.venue){
+      const vn=(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+      if(l.venue===vn)lines.push(`競馬場: 前走と同じ${vn}`);
+    }
+    // 蓄積
+    if(h.f?.['蓄積'])lines.push(`蓄積データ: ${h.f['蓄積'].v}`);
+    // 安定
+    if(h.prev?.length>=2){
+      const board=h.prev.slice(0,3).filter(p=>p.fin<=5).length;
+      if(board>=2)lines.push(`安定感: 直近3走中${board}走で掲示板内`);
+    }
+    return lines.join('\n');
+  });
+}
+
+async function generatePrediction(id){
+  const apiKey=loadSettings().claudeApiKey;
+  if(!apiKey){alert('Claude APIキーが設定されていません。\n☁️同期タブでAPIキーを設定してください。');return}
+  const r=RACES.find(x=>x.id===id);if(!r||!r.scored?.length)return;
+  const btn=document.getElementById('genPredBtn');
+  const area=document.getElementById('predictionArea');
+  if(btn)btn.disabled=true;
+  if(btn)btn.textContent='生成中...';
+  if(area)area.innerHTML='<div style="text-align:center;padding:20px;color:var(--dim)">AIが着順予想を生成中...</div>';
+
+  const inf=r.info;
+  const vn=(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+  const horseData=buildHorseDataForAI(r);
+
+  const prompt=`あなたは競馬予想の解説者です。以下のレースについて、スコア上位5頭の着順予想コメントを生成してください。
+
+## レース情報
+${inf.date||''} ${vn} ${inf.raceNum||''}R
+距離: ${inf.dist||''}m ${inf.surf||''} / 馬場: ${inf.cond||''}
+クラス: ${inf.cls||''}
+
+## スコア上位5頭のデータ
+${horseData.join('\n\n')}
+
+## ルール
+- 1頭ごとに予想着順（1着〜5着）とコメントを書く
+- スコア順に1着予想から並べる
+- 1頭あたり1〜3文
+- 話し言葉で自然に書く
+- 「〜しそう」「〜可能性が高い」等の表現を使い、断定しない
+- 根拠はデータの事実のみ（前走着順、着差、上がり、通過順位、距離・コース・馬場の一致、馬体重変化、間隔、斤量、トレンド）
+- オッズ・人気・騎手評価・血統・主観は使わない
+- 各頭のコメントの前に「◎1着予想: 馬番 馬名」のように見出しをつける
+
+## 出力形式（この通りに出力）
+◎1着予想: [馬番] [馬名]
+[コメント]
+
+○2着予想: [馬番] [馬名]
+[コメント]
+
+▲3着予想: [馬番] [馬名]
+[コメント]
+
+△4着予想: [馬番] [馬名]
+[コメント]
+
+×5着予想: [馬番] [馬名]
+[コメント]`;
+
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:1024,
+        messages:[{role:'user',content:prompt}]
+      })
+    });
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      throw new Error(err.error?.message||'API error: '+res.status);
+    }
+    const data=await res.json();
+    const text=data.content?.[0]?.text||'';
+    // 保存
+    r._prediction={text,generatedAt:new Date().toISOString()};
+    saveR(RACES);
+    renderPredictionArea(r);
+  }catch(e){
+    if(area)area.innerHTML=`<div style="color:var(--red);font-size:13px;padding:10px">エラー: ${e.message}</div>`;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='🤖 着順予想を再生成'}
+  }
+}
+
+function renderPredictionArea(r){
+  const area=document.getElementById('predictionArea');
+  if(!area)return;
+  const pred=r._prediction;
+  if(!pred?.text){area.innerHTML='';return}
+  const lines=pred.text.split('\n');
+  let html='';
+  const markColors={'◎':'var(--red)','○':'var(--grn)','▲':'var(--blu)','△':'var(--gld)','×':'var(--dim)'};
+  lines.forEach(line=>{
+    const m=line.match(/^([◎○▲△×])(\d着予想[:：]\s*.+)/);
+    if(m){
+      const col=markColors[m[1]]||'var(--ink)';
+      html+=`<div style="font-weight:900;font-size:14px;color:${col};margin-top:10px;margin-bottom:2px;border-bottom:1px solid var(--bdr);padding-bottom:3px">${m[1]}${m[2]}</div>`;
+    }else if(line.trim()){
+      html+=`<div style="font-size:13px;line-height:1.7;color:var(--ink);padding-left:4px">${line}</div>`;
+    }
+  });
+  html+=`<div style="font-size:10px;color:var(--lt);margin-top:8px">生成: ${new Date(pred.generatedAt).toLocaleString('ja-JP')}</div>`;
+  area.innerHTML=html;
 }
 
 function deleteRace(id){
@@ -3024,6 +3190,19 @@ function renderSyncView(){
 </div>
 <div style="font-size:11px;color:var(--dim);line-height:1.6">
 1レース最大300円（100円×3点）。累計が予算上限に達したら自動見送り。
+</div>
+</div>
+
+<div class="pnl">
+<h3>🤖 Claude API設定（着順予想コメント生成用）</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
+Anthropic APIキーを設定すると、各レースの着順予想コメントをAIが自動生成します。
+</div>
+<div style="margin-bottom:6px"><b style="font-size:13px">Anthropic API Key:</b></div>
+<input type="password" class="sync-url" id="claudeKeyInput" value="${loadSettings().claudeApiKey||''}" placeholder="sk-ant-xxxxx">
+<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+<button class="btn-s" onclick="const k=document.getElementById('claudeKeyInput').value.trim();const s=loadSettings();s.claudeApiKey=k;saveSettings(s);alert(k?'APIキーを保存しました':'APIキーを削除しました')">保存</button>
+<a href="https://console.anthropic.com/settings/keys" target="_blank" style="font-size:12px;color:var(--blu);align-self:center">APIキー発行ページ</a>
 </div>
 </div>
 
