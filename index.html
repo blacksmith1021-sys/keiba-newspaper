@@ -727,7 +727,7 @@ h.score=Math.max(0,s);h.f=f});
 // 正規化は最高得点を100として相対値
 const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round((h.ns/100)*h.odds*100-100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
 
-// ===== BET (v17: ワイド主軸200円+馬連添え100円=300円、レース質判定付き) =====
+// ===== BET (v18: レースに応じて馬券種自動選択、最大3点300円) =====
 function genBet(scored,raceInfo,marketOdds){
   const marks=['◎','○','▲','△','×'];
   const eU=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.4*100)/100};
@@ -805,6 +805,7 @@ function genBet(scored,raceInfo,marketOdds){
 
   // ===== 軸馬選定: ns>=80 かつ 人気3番手以内、スコア順 =====
   const axisPool=scored.filter(h=>h.ns>=80&&h.pop&&h.pop<=3).sort((a,b)=>b.ns-a.ns);
+  const highPool=scored.filter(h=>h.ns>=80).sort((a,b)=>b.ns-a.ns); // ワイド用: ns80以上全馬
   const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
   let A=axisPool[0]||null;
   let B=axisPool[1]||(himoPool[0]||null);
@@ -814,7 +815,6 @@ function genBet(scored,raceInfo,marketOdds){
   const topNs=scored[0]?.ns||0;
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
   const noAxis=!A;
-  // 予算超過チェック（当日の累計投資が予算上限に達していたら見送り）
   let budgetOver=false;
   if(typeof getDailyBudget==='function'&&typeof getTodayInvested==='function'){
     const remaining=getDailyBudget()-getTodayInvested();
@@ -845,7 +845,7 @@ function genBet(scored,raceInfo,marketOdds){
   const estU=eU(A,B);
   const estW=C?eW(B,C):0;
 
-  // ===== 資金管理: 100円×最大3点=300円上限、馬連orワイド =====
+  // ===== 馬券種自動選択: 最大3点・300円 =====
   const mktOdds=marketOdds||{umaren:{},wide:{}};
   const hasMarket=Object.keys(mktOdds.umaren).length>0||Object.keys(mktOdds.wide).length>0;
 
@@ -855,54 +855,86 @@ function genBet(scored,raceInfo,marketOdds){
     const key=nums.join('-');
     if(type==='馬連'&&mktOdds.umaren?.[key]!=null)return mktOdds.umaren[key];
     if(type==='ワイド'&&mktOdds.wide?.[key]!=null)return mktOdds.wide[key];
+    if(type==='単勝')return horses[0]?.odds||null;
     return null;
-  }
-
-  // 買い目のグレード判定
-  function gradeTicket(type,actualOdds){
-    if(actualOdds==null)return{grade:'?',label:'オッズ未取得',priority:99};
-    if(type==='馬連'){
-      if(actualOdds>=10)return{grade:'◎',label:'高配当期待',priority:1};
-      if(actualOdds>=4)return{grade:'○',label:'堅実',priority:2};
-      return{grade:'×',label:'除外(4倍未満)',priority:99};
-    }else{
-      if(actualOdds>=3)return{grade:'◎',label:'推奨',priority:3};
-      if(actualOdds>=2.5)return{grade:'○',label:'条件付き',priority:4};
-      return{grade:'×',label:'除外(2.5倍未満)',priority:99};
-    }
   }
 
   let tickets=[];
   if(!skipRecommended){
-    // 相手候補を集める（A以外でns50以上、最大3頭）
-    const partners=[B,C].filter(Boolean);
-    const extra=himoPool.filter(h=>h!==A&&h!==B&&h!==C).slice(0,1);
-    const allPartners=[...partners,...extra].slice(0,3);
-
-    if(allPartners.length>=2){
-      // 馬連: 軸A × 相手（最大3点×100円）
-      allPartners.forEach(p=>{
-        const actual=getActualOdds('馬連',[A,p]);
-        const g=gradeTicket('馬連',actual);
-        tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],est:eU(A,p),
-          actualOdds:actual,grade:g.grade,gradeLabel:g.label,priority:g.priority,
-          reason:A.num+'番─'+p.num+'番が1・2着で的中'});
-      });
-    }else if(allPartners.length===1){
-      // ワイド: A─B（100円）
-      const actual=getActualOdds('ワイド',[A,allPartners[0]]);
-      const g=gradeTicket('ワイド',actual);
-      tickets.push({type:'ワイド',desc:A.num+'─'+allPartners[0].num,amount:100,horses:[A,allPartners[0]],est:eW(A,allPartners[0]),
-        actualOdds:actual,grade:g.grade,gradeLabel:g.label,priority:g.priority,
-        reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
-    }
-
-    // 実際のオッズがある場合: グレード×で除外、残りを優先順にソート
     if(hasMarket){
-      tickets=tickets.filter(tk=>tk.grade!=='×');
-      tickets.sort((a,b)=>a.priority-b.priority);
+      // ===== オッズあり: 馬券種自動選択 =====
+
+      // ① 馬連候補: 軸A × 相手(ns50以上)、実際オッズ10倍以上
+      const umarenPartners=[B,C,...himoPool.filter(h=>h!==A&&h!==B&&h!==C)].filter(Boolean);
+      const umarenCands=[];
+      umarenPartners.forEach(p=>{
+        const actual=getActualOdds('馬連',[A,p]);
+        if(actual!=null&&actual>=10){
+          umarenCands.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],est:eU(A,p),
+            actualOdds:actual,grade:'◎',gradeLabel:'軸馬絡み・高配当',priority:1,
+            reason:A.num+'番─'+p.num+'番が1・2着で的中'});
+        }
+      });
+      umarenCands.sort((a,b)=>b.actualOdds-a.actualOdds); // 高配当順
+
+      // ② ワイド候補: ns80以上同士、実際オッズ3倍以上
+      const wideCands=[];
+      for(let i=0;i<highPool.length;i++){
+        for(let j=i+1;j<highPool.length;j++){
+          const actual=getActualOdds('ワイド',[highPool[i],highPool[j]]);
+          if(actual!=null&&actual>=3){
+            wideCands.push({type:'ワイド',desc:highPool[i].num+'─'+highPool[j].num,amount:100,
+              horses:[highPool[i],highPool[j]],est:eW(highPool[i],highPool[j]),
+              actualOdds:actual,grade:'○',gradeLabel:'補完',priority:3,
+              reason:highPool[i].num+'番─'+highPool[j].num+'番が3着以内で的中'});
+          }
+        }
+      }
+      wideCands.sort((a,b)=>b.actualOdds-a.actualOdds);
+
+      // ③ 自動選択ロジック
+      if(umarenCands.length>=3){
+        // 馬連10倍以上が3点以上 → 馬連のみ最大3点
+        tickets=umarenCands.slice(0,3);
+      }else if(umarenCands.length>=1){
+        // 馬連10倍以上が1〜2点 → 馬連＋ワイドで補完
+        tickets=[...umarenCands];
+        const remaining=3-tickets.length;
+        tickets.push(...wideCands.slice(0,remaining));
+      }else if(wideCands.length>=1){
+        // 馬連10倍以上が0点 → ワイドのみ最大3点
+        tickets=wideCands.slice(0,3);
+      }
+      // else: tickets=[] → 見送り
+
+      // ④ 単勝: 軸馬オッズ10倍以上 & 枠が余っている場合のみ追加
+      if(tickets.length<3&&A.odds&&A.odds>=10){
+        const tanshoActual=getActualOdds('単勝',[A]);
+        if(tanshoActual!=null&&tanshoActual>=10){
+          tickets.push({type:'単勝',desc:String(A.num),amount:100,horses:[A],est:A.odds,
+            actualOdds:tanshoActual,grade:'△',gradeLabel:'軸馬単勝',priority:5,
+            reason:A.num+'番が1着で的中'});
+        }
+      }
+
     }else{
-      // オッズ未入力: 従来通り理論オッズで最低ラインのみチェック
+      // ===== オッズ未入力: 従来通りスコアのみで生成 =====
+      const partners=[B,C].filter(Boolean);
+      const extra=himoPool.filter(h=>h!==A&&h!==B&&h!==C).slice(0,1);
+      const allPartners=[...partners,...extra].slice(0,3);
+
+      if(allPartners.length>=2){
+        allPartners.forEach(p=>{
+          tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],est:eU(A,p),
+            actualOdds:null,grade:'?',gradeLabel:'オッズ未入力',priority:99,
+            reason:A.num+'番─'+p.num+'番が1・2着で的中'});
+        });
+      }else if(allPartners.length===1){
+        tickets.push({type:'ワイド',desc:A.num+'─'+allPartners[0].num,amount:100,horses:[A,allPartners[0]],est:eW(A,allPartners[0]),
+          actualOdds:null,grade:'?',gradeLabel:'オッズ未入力',priority:99,
+          reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
+      }
+      // 理論オッズで最低ラインチェック
       tickets=tickets.filter(tk=>{
         if(tk.type==='馬連'&&tk.est<4.0)return false;
         if(tk.type==='ワイド'&&tk.est<2.5)return false;
@@ -917,13 +949,13 @@ function genBet(scored,raceInfo,marketOdds){
   const favNote=favIsOverrated
     ?'1番人気('+favOdds+'倍)は過剰人気→除外'
     :'1番人気('+favOdds+'倍)は実力通り';
-  const betType=tickets.length>0?tickets[0].type:'';
-  const patName=skipRecommended?'見送り推奨':betType+'×'+tickets.length+'点('+totalInv+'円)';
+  const types=[...new Set(tickets.map(t=>t.type))];
+  const patName=skipRecommended?'見送り推奨':types.join('＋')+'×'+tickets.length+'点('+totalInv+'円)';
   const patReason=skipRecommended
     ?skipReason
     :'軸A='+A.num+'番(ns'+A.ns+'/'+A.pop+'番人気/EV'+axisEv+')。'+patName+'。【'+favNote+'】';
 
-  const bestObj={type:betType,horses:[A,B],est:eU(A,B),ev:axisEv,prob:0,
+  const bestObj={type:types[0]||'',horses:[A,B],est:eU(A,B),ev:axisEv,prob:0,
     why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
 
   // レース質の警告文
