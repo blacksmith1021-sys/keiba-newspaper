@@ -696,7 +696,7 @@ h.score=Math.max(0,s);h.f=f});
 const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round((h.ns/100)*h.odds*100-100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
 
 // ===== BET (v17: ワイド主軸200円+馬連添え100円=300円、レース質判定付き) =====
-function genBet(scored,raceInfo){
+function genBet(scored,raceInfo,marketOdds){
   const marks=['◎','○','▲','△','×'];
   const eU=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.4*100)/100};
   const eW=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.15*100)/100};
@@ -833,10 +833,17 @@ function genBet(scored,raceInfo){
         reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
     }
   }
-  // 最低オッズ条件: 馬連4.0倍未満・ワイド2.5倍未満を除外
+  // 最低オッズ条件: 実際のオッズで判定（取得できない場合は理論オッズで代替）
+  const mktOdds=marketOdds||{umaren:{},wide:{}};
   tickets=tickets.filter(tk=>{
-    if(tk.type==='馬連'&&tk.est<4.0)return false;
-    if(tk.type==='ワイド'&&tk.est<2.5)return false;
+    const nums=tk.horses.map(x=>x.num).sort((a,b)=>a-b);
+    const key=nums.join('-');
+    let odds=tk.est; // デフォルト: 理論オッズ
+    if(tk.type==='馬連'&&mktOdds.umaren?.[key]!=null) odds=mktOdds.umaren[key];
+    else if(tk.type==='ワイド'&&mktOdds.wide?.[key]!=null) odds=mktOdds.wide[key];
+    tk._oddsUsed=odds; // 判定に使ったオッズを記録
+    if(tk.type==='馬連'&&odds<4.0)return false;
+    if(tk.type==='ワイド'&&odds<2.5)return false;
     return true;
   });
   if(!skipRecommended&&tickets.length===0)skipRecommended=true;
@@ -1541,7 +1548,7 @@ function doAnalyze(){
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
   const marketOdds=parsed._marketOdds||{umaren:{},wide:{}};
-  const bet=genBet(scored,parsed.info);
+  const bet=genBet(scored,parsed.info,marketOdds);
   const id=Date.now().toString();
   const venue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
@@ -1741,7 +1748,7 @@ function recalcAll(){
     })),info:r.info};
     try{
       const newScored=score(race);
-      const newBet=genBet(newScored,r.info);
+      const newBet=genBet(newScored,r.info,r._marketOdds);
       r.scored=newScored;
       r.bet=newBet;
       if(r.result?.top3?.length>=3){
@@ -2751,7 +2758,7 @@ async function doGhLoad(){
       })),info:r.info};
       const oldTop=r.scored[0]?.ns||0;
       r.scored=score(race);
-      r.bet=genBet(r.scored,r.info);
+      r.bet=genBet(r.scored,r.info,r._marketOdds);
       r._scoreVer=SCORE_VER;
       const newTop=r.scored[0]?.ns||0;
       if(rescored===0)console.log('再スコア例: '+r.label+' 旧top='+oldTop+' → 新top='+newTop+' EV='+r.scored[0]?.ev);
