@@ -1824,35 +1824,16 @@ function doAnalyze(){
         key.split('-').forEach(n=>{const num=parseInt(n);if(num)oddsNums.add(num);});
       }
     }
-    // 出馬表に存在しない馬番がオッズに含まれていたらエラー
-    const invalidNums=[...oddsNums].filter(n=>!raceNums.has(n)&&n>maxRaceNum);
-    if(invalidNums.length>0){
-      const errDiv=document.getElementById('analyzeError');
-      if(errDiv){
-        errDiv.innerHTML=`<div style="padding:10px 14px;border:1px solid var(--red);background:rgba(196,30,58,.06);font-size:13px;color:var(--red);border-radius:4px;margin-top:8px">
-          <b>レースが違います</b><br>
-          オッズデータに出馬表にない馬番（${invalidNums.sort((a,b)=>a-b).join(', ')}番）が含まれています。<br>
-          出馬表の頭数：${raceNums.size}頭（最大${maxRaceNum}番）<br>
-          <span style="font-size:11px;color:var(--dim)">オッズは出馬表と同じレースのデータを貼り付けてください。</span>
-        </div>`;
-        errDiv.classList.remove('hidden');
+    // 出馬表に存在しない馬番のオッズを除外（JRAは最大頭数分のデータを出力するため）
+    let filtered=0;
+    for(const[type,odds]of Object.entries(marketOdds)){
+      if(!odds)continue;
+      for(const key of Object.keys(odds)){
+        const nums=key.split('-').map(Number);
+        if(nums.some(n=>n>maxRaceNum)){delete odds[key];filtered++;}
       }
-      return;
     }
-    // オッズの最大馬番が出馬表の頭数を大幅に超えている場合もエラー
-    const maxOddsNum=Math.max(...oddsNums,0);
-    if(maxOddsNum>0&&maxOddsNum>maxRaceNum+2){
-      const errDiv=document.getElementById('analyzeError');
-      if(errDiv){
-        errDiv.innerHTML=`<div style="padding:10px 14px;border:1px solid var(--red);background:rgba(196,30,58,.06);font-size:13px;color:var(--red);border-radius:4px;margin-top:8px">
-          <b>レースが違います</b><br>
-          オッズデータの最大馬番（${maxOddsNum}番）が出馬表の頭数（${raceNums.size}頭）と一致しません。<br>
-          <span style="font-size:11px;color:var(--dim)">オッズは出馬表と同じレースのデータを貼り付けてください。</span>
-        </div>`;
-        errDiv.classList.remove('hidden');
-      }
-      return;
-    }
+    if(filtered>0)console.log('[ODDS] 出馬表外の馬番を'+filtered+'件除外（'+raceNums.size+'頭立て・最大'+maxRaceNum+'番）');
   }
 
   const bet=genBet(scored,parsed.info,marketOdds);
