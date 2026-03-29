@@ -1468,7 +1468,7 @@ JRAの<b>レース結果ページ</b>を1レースずつ、または複数レー
 <textarea id="bulkIn" rows="8" placeholder="JRAレース結果ページをコピーして貼り付け&#10;&#10;複数レース分をまとめて貼り付けてもOK&#10;（各レースの区切りは自動検出します）"></textarea>
 <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
 <button class="btn btn-b" onclick="doBulkImport()">一括取り込み</button>
-<button class="btn-s" onclick="downloadHorseDBCSV()" style="padding:6px 16px">📥 馬DBデータCSV出力</button>
+<button class="btn-s" onclick="downloadAllCSV()" style="padding:6px 16px">📥 全データCSV出力</button>
 <span id="bulkStatus" style="font-size:12px;color:var(--dim)"></span>
 </div>
 <div id="bulkPreview" style="margin-top:8px"></div>
@@ -1571,19 +1571,34 @@ function doBulkImport(){
         }
       });
       
-      // RACESにも超軽量エントリ（一覧表示用のみ）
+      // RACESに馬データ付きエントリを登録
       const id='bulk_'+Date.now()+'_'+Math.random().toString(36).substr(2,5)+'_'+bi;
       const dupRace=RACES.some(r=>r.info?.date===info.date&&r.info?.raceNum===info.raceNum&&(r.info?.course||'').includes(venue));
       if(!dupRace){
-        const t1=pr.allResults[0],t2=pr.allResults[1],t3=pr.allResults[2];
+        // allResultsから統一形式のscoredを構築
+        const bulkScored=pr.allResults.map(ar=>{
+          const sm=ar.sexAge?.match(/(牡|牝|せん)(\d)/);
+          const bwm=ar.bodyWeight?.match(/(\d+)\(([+\-\d]+)\)/);
+          return{
+            num:ar.num,name:ar.name||'',waku:0,
+            sex:sm?sm[1]:'',age:sm?+sm[2]:0,
+            imp:ar.weight||0,jk:ar.jockey||'',
+            wt:bwm?+bwm[1]:0,wc:bwm?parseInt(bwm[2]):null,
+            bl:false,prev:[],rec:null,starts:0,
+            ns:0,score:0,f:{},
+            _resultRank:ar.rank,_resultTime:ar.time||'',
+            _resultLast3f:ar.last3f||0,_resultPositions:ar.positions||null,
+            _resultMargin:ar.margin||'',_resultPopularity:ar.popularity||0
+          };
+        });
         RACES.push({
           id,
           label:(info.date||'?')+' '+venue+' '+(info.raceNum||'?')+'R',
           sortKey:(info.date?info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999')+String(info.raceNum||0).padStart(2,'0'),
           info:{date:info.date,course:info.course,raceNum:info.raceNum,dist:info.dist,surf:info.surf,type:info.type,cond:info.cond},
-          scored:[],
-          bet:{best:null,tickets:[],totalInv:0,wideAmount:0,fukAmount:0},
-          result:{top3:pr.top3.map(String),payout:pr.payout||0,reasons:['取込データ']}
+          scored:bulkScored,
+          bet:{best:null,tickets:[],totalInv:0},
+          result:{top3:pr.top3.map(String),payout:pr.payout||0,reasons:['取込データ'],allResults:pr.allResults,payouts:pr.payouts}
         });
       }
       
@@ -1891,7 +1906,7 @@ function renderList(){
       ${bandStats.filter(b=>b.total>0).map(b=>`<span>ns${b.label}: <b>${b.rate}%</b>(${b.hit}/${b.total})</span>`).join('')}
     </div>`;
   }
-  h+=`<div style="margin-top:8px;text-align:right"><button class="btn-s" onclick="downloadFullCSV()" style="padding:6px 16px">📥 全期間CSV出力</button></div>`;
+  h+=`<div style="margin-top:8px;text-align:right"><button class="btn-s" onclick="downloadAllCSV()" style="padding:6px 16px">📥 全データCSV出力</button></div>`;
   h+=`</div>`;
 
   // 全日付を統一表示
@@ -1966,9 +1981,8 @@ function renderList(){
   if(RACES.length>0){
     h+=`<div style="text-align:center;margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button class="btn-s" onclick="recalcAll()" style="padding:6px 20px;color:var(--blu)">🔄 全レース再分析</button>
-      <button class="btn-s" onclick="downloadCSV()" style="padding:6px 20px">📥 CSVダウンロード</button>
-      <button class="btn-s" onclick="triggerCSVImport()" style="padding:6px 20px;color:var(--grn)">📂 検証データCSV取込</button>
-      <button class="btn-s" onclick="downloadAnalysisCSV()" style="padding:6px 20px;color:var(--blu)">🔬 検証データCSV出力</button>
+      <button class="btn-s" onclick="downloadAllCSV()" style="padding:6px 20px">📥 全データCSV出力</button>
+      <button class="btn-s" onclick="triggerCSVImport()" style="padding:6px 20px;color:var(--grn)">📂 CSV取込</button>
       <button class="btn-s" onclick="if(confirm('保存データを全て削除しますか？（元に戻せません）')){RACES=[];saveR(RACES);renderList()}" style="padding:6px 20px;color:var(--red)">🗑 全データ削除</button>
     </div>`;
   }
@@ -2002,6 +2016,83 @@ function recalcAll(){
   alert(count+'レースを再分析しました。買い目・的中判定が最新ロジックに更新されました。');
 }
 
+// === 全データCSV出力（統一形式） ===
+function downloadAllCSV(){
+  const BOM='\uFEFF';
+  const header=['日付','競馬場','レース番号','クラス','距離','コース','回り','馬場状態','頭数',
+    '馬番','枠番','馬名','性齢','斤量','騎手名','馬体重','馬体重増減','ブリンカー',
+    '前走日付','前走競馬場','前走レース格','前走距離','前走コース','前走馬場',
+    '前走着順','前走頭数','前走着差','前走上がりタイム','前走間隔(週)',
+    'スコア合計','印',
+    '実際着順','3着以内','単勝オッズ','人気',
+    '実際上がりタイム','実際通過順位'];
+  const rows=[];
+  const sorted=[...RACES].filter(r=>(r.scored?.length>0)||(r.result?.allResults?.length>0)).sort((a,b)=>{
+    const ka=a.sortKey||a.id,kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0;
+  });
+  const marks=['◎','○','▲','△'];
+
+  sorted.forEach(r=>{
+    const inf=r.info||{};
+    const venue=(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+    const top3=r.result?.top3?.map(n=>+n)||[];
+    const allRes=r.result?.allResults||[];
+    // 馬データソース: scored（出馬表分析・一括取込）
+    const horses=r.scored?.length>0?r.scored:[];
+    if(horses.length===0)return;
+    const headCount=horses.length;
+    const isBulk=r.id?.startsWith('bulk_')||r.id?.startsWith('csv_');
+
+    horses.forEach((h,idx)=>{
+      const l=h.prev?.[0];
+      // 前走間隔(週)
+      let weeks='';
+      if(l?.dateKey&&inf.date){
+        const parts=inf.date.split('/');
+        const today=new Date(+parts[0],+parts[1]-1,+parts[2]);
+        const ly=Math.floor(l.dateKey/10000),lm=Math.floor((l.dateKey%10000)/100),ld=l.dateKey%100;
+        const lastDay=new Date(ly,lm-1,ld);
+        weeks=Math.round(Math.round((today-lastDay)/(1000*60*60*24))/7);
+      }
+      // 前走データ
+      const prevDate=l?.dateKey?String(l.dateKey).replace(/(\d{4})(\d{2})(\d{2})/,'$1/$2/$3'):'';
+      // 印（出馬表分析レースのみ）
+      const mark=(!isBulk&&idx<4)?marks[idx]:'';
+      // 結果データ
+      const ar=allRes.find(a=>a.num===h.num);
+      const actualRank=ar?.rank||h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:'');
+      const inTop3=top3.includes(h.num)?1:(actualRank&&actualRank<=3?1:0);
+      const resLast3f=ar?.last3f||h._resultLast3f||'';
+      const resPos=ar?.positions?ar.positions.join('-'):(h._resultPositions?h._resultPositions.join('-'):'');
+
+      rows.push([
+        inf.date||'',venue,inf.raceNum||'',inf.cls||'',
+        inf.dist||'',inf.type||'',inf.dir||'',inf.cond||'',headCount,
+        h.num,h.waku||'',h.name||'',(h.sex||'')+(h.age||''),h.imp||'',h.jk||'',
+        h.wt||'',h.wc!=null?(h.wc>=0?'+':'')+h.wc:'',h.bl?'有':'',
+        prevDate,l?.venue||'',l?.cls||'',l?.dist||'',
+        l?.surface==='ダ'?'ダート':l?.surface==='芝'?'芝':(l?.surface||''),l?.cond||'',
+        l?.fin||'',l?.run||'',l?.gap!=null?l.gap:'',l?.f3||'',weeks,
+        h.ns||'',mark,
+        actualRank,top3.length>=3?inTop3:'',
+        h.odds||ar?.popularity?'':'',ar?.popularity||h._resultPopularity||'',
+        resLast3f,resPos
+      ]);
+    });
+  });
+  if(rows.length===0){alert('出力するデータがありません。\nRACES: '+RACES.length+'件');return}
+  const csv=BOM+[header,...rows].map(row=>row.map(cell=>{const s=String(cell==null?'':cell);return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='keiba_all_'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  alert('全データCSV出力完了: '+rows.length+'行（'+sorted.length+'レース）');
+}
+
+// === 以下は旧CSV関数（互換性維持） ===
 function downloadCSV(){
   const BOM='\uFEFF';
   const header=['日付','競馬場','レース','距離','コース','馬場','券種','買目','馬名','結果','1着','2着','3着','配当(100円あたり)','回収額','投資','利益','回収率','信頼度','軸馬EV','◎馬番','◎スコア','◎EV','○馬番','○スコア','○EV'];
