@@ -1189,78 +1189,67 @@ function checkAllTickets(r){
 }
 
 // ===== 的中判定・回収計算ヘルパー =====
+// 推奨した馬券種のみで的中判定を行う（他券種の偶然の的中は計上しない）
 function getHitInfo(r){
   const res=r.result,bt=r.bet;
-  if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null,skip:false};
-  // 見送り推奨レースは投資0・回収0・的中判定なし
+  if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null,skip:false,hitTickets:[]};
   if(bt?.skipRecommended||bt?.totalInv===0){
-    return{wideHit:false,wideTicketHit:false,fukHit:false,anyHit:false,label:'見送り',ret:0,inv:0,tickets:null,skip:true};
+    return{wideHit:false,wideTicketHit:false,fukHit:false,anyHit:false,label:'見送り',ret:0,inv:0,tickets:null,skip:true,hitTickets:[]};
   }
-  
+
   const t3=res.top3.map(n=>+n);
-  let betNums=[];
-  if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
-  else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
-  else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
-  
-  const inv=(bt?.totalInv!=null?bt.totalInv:((bt?.wideAmount||0)+(bt?.fukAmount||0)))||0;
-  const wAmt=bt?.wideAmount||0;
-  const fAmt=bt?.fukAmount||0;
-  const fukNum=bt?.fukushoHorse?.num;
-
-  // 馬連の的中判定（A─Bが1・2着）
-  const wideHit=betNums.length>=2&&t3.slice(0,2).includes(betNums[0])&&t3.slice(0,2).includes(betNums[1]);
-  // ワイド的中判定：v16以降はチケット内のワイド組み合わせ（B─C）を参照
-  const wideTicket=bt?.tickets?.find(tk=>tk.type==='ワイド');
-  const wideNums=wideTicket?.horses?.map(h=>h.num)||betNums;
-  const wideTicketHit=wideNums.length>=2&&t3.includes(wideNums[0])&&t3.includes(wideNums[1]);
-  // 複勝的中判定
-  const fukHit=!!(fukNum&&fAmt>0&&t3.includes(fukNum));
-
-  // 実配当取得
   const pays=res.payouts||{};
-  let ret=0;
+  const inv=(bt?.totalInv!=null?bt.totalInv:((bt?.wideAmount||0)+(bt?.fukAmount||0)))||0;
 
-  // v14以降（tickets配列がある場合）
+  // === 推奨チケットごとに的中判定（推奨券種のみ） ===
+  let ret=0;
+  const hitTickets=[];
+
   if(bt?.tickets?.length>0){
-    const allTicketResults=checkAllTickets(r);
     bt.tickets.forEach(tk=>{
-      const ticketResult=allTicketResults?.[tk.type];
-      if(ticketResult?.hit){
-        ret+=(ticketResult.pay||0)*(tk.amount/100);
+      const nums=tk.horses?.map(h=>h.num)||[];
+      let hit=false;
+      switch(tk.type){
+        case '単勝': hit=nums.length>=1&&t3[0]===nums[0]; break;
+        case '馬連': hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]); break;
+        case 'ワイド': hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]); break;
+        case '馬単': hit=nums.length>=2&&t3[0]===nums[0]&&t3[1]===nums[1]; break;
+        case '枠連': {const wk=tk.horses?.map(h=>h.waku)||[];hit=wk.length>=2&&t3.slice(0,2).some(n=>{const h=r.scored?.find(x=>x.num===n);return h&&h.waku===wk[0]})&&t3.slice(0,2).some(n=>{const h=r.scored?.find(x=>x.num===n);return h&&h.waku===wk[1]});} break;
+        case '3連複': hit=nums.length>=3&&t3.includes(nums[0])&&t3.includes(nums[1])&&t3.includes(nums[2]); break;
+        case '3連単': hit=nums.length>=3&&t3[0]===nums[0]&&t3[1]===nums[1]&&t3[2]===nums[2]; break;
+      }
+      if(hit){
+        const sortedNums=tk.type==='馬単'||tk.type==='3連単'?nums:[...nums].sort((a,b)=>a-b);
+        const pay=findPayout(pays,tk.type,sortedNums)||0;
+        ret+=pay*(tk.amount/100);
+        hitTickets.push({type:tk.type,desc:tk.desc,pay,amount:tk.amount});
       }
     });
-    // フォールバック: 配当データ不足かつワイドチケット的中の場合
-    if(ret===0&&wideTicketHit){
-      const umaPay=wideHit?findPayout(pays,'馬連',betNums):0;
-      const widePay=findPayout(pays,'ワイド',wideNums);
-      const fallbackPay=widePay||umaPay||res.payout||0;
-      if(fallbackPay>0)ret=Math.round(fallbackPay*((wideTicket?.amount||200)/100));
-    }
   }
-  // v13以前（従来のワイド+複勝ロジック）
+  // v13以前（従来ロジック: tickets配列なし）
   else{
-    if(wideHit){
-      const realWidePay=findPayout(pays,'ワイド',betNums);
-      ret+=(realWidePay||res.payout||0)*((wAmt||300)/100);
-    }
-    if(fukHit&&fAmt>0){
-      const realFukPay=findPayout(pays,'複勝',[fukNum]);
-      if(realFukPay>0){ret+=realFukPay*(fAmt/100)}
-      else{
-        const fOdds=bt.fukushoHorse?.odds?Math.max(1.1,bt.fukushoHorse.odds*0.35):1.5;
-        ret+=Math.round(fOdds*fAmt/100*100);
-      }
-    }
+    let betNums=[];
+    if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
+    else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
+    else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
+    const wAmt=bt?.wideAmount||0;const fAmt=bt?.fukAmount||0;const fukNum=bt?.fukushoHorse?.num;
+    const wHit=betNums.length>=2&&t3.slice(0,2).includes(betNums[0])&&t3.slice(0,2).includes(betNums[1]);
+    if(wHit){const p=findPayout(pays,'ワイド',betNums)||res.payout||0;ret+=p*((wAmt||300)/100);hitTickets.push({type:'馬連',desc:betNums.join('─'),pay:p});}
+    const fHit=!!(fukNum&&fAmt>0&&t3.includes(fukNum));
+    if(fHit){const p=findPayout(pays,'複勝',[fukNum])||0;if(p>0)ret+=p*(fAmt/100);hitTickets.push({type:'複勝',desc:String(fukNum),pay:p});}
   }
-  
-  const anyHit=wideHit||wideTicketHit||fukHit;
-  const label=wideHit?'的中':wideTicketHit?'ワイド的中':fukHit?'複勝的中':'不的中';
-  
-  // 全券種照合
+
+  const anyHit=hitTickets.length>0;
+  const label=anyHit?hitTickets.map(h=>h.type+'的中').join('・'):'不的中';
+  // 互換用フラグ
+  const wideHit=hitTickets.some(h=>h.type==='馬連');
+  const wideTicketHit=hitTickets.some(h=>h.type==='ワイド');
+  const fukHit=hitTickets.some(h=>h.type==='複勝');
+
+  // 全券種照合（参考表示用）
   const tickets=checkAllTickets(r);
-  
-  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,tickets,skip:false};
+
+  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,tickets,skip:false,hitTickets};
 }
 
 // ===== LOSS ANALYSIS =====
@@ -1307,9 +1296,9 @@ function getTrends(){
   const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
   if(done.length<2)return null;
   const tot=done.length;
-  const hits=done.filter(r=>getHitInfo(r).wideHit).length;
-  const fukHits=done.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
-  const anyHits=done.filter(r=>getHitInfo(r).anyHit).length;
+  const hits=done.filter(r=>getHitInfo(r).anyHit).length;
+  const fukHits=0;
+  const anyHits=hits;
   const inv=done.reduce((s,r)=>s+getHitInfo(r).inv,0);
   const ret=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   const causes={};
@@ -1908,8 +1897,8 @@ function renderList(){
   const allAnalyzed=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
   const skipped=allAnalyzed.filter(r=>getHitInfo(r).skip).length;
   const done=allAnalyzed.filter(r=>!getHitInfo(r).skip);
-  const hits=done.filter(r=>getHitInfo(r).wideHit).length;
-  const fukHits=done.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
+  const hits=done.filter(r=>getHitInfo(r).anyHit).length;
+  const fukHits=0;
   const totalBet=done.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
   const totalReturn=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   const profit=totalReturn-totalBet;
@@ -1963,8 +1952,8 @@ function renderList(){
     if(!dt||!groups[dt])return;
     const dayRaces=groups[dt];
     const dayDone=dayRaces.filter(r=>r.result?.top3?.length>=3&&!isPastOnly(r)&&!getHitInfo(r).skip);
-    const dayHits=dayDone.filter(r=>getHitInfo(r).wideHit).length;
-    const dayFuk=dayDone.filter(r=>{const hi=getHitInfo(r);return !hi.wideHit&&hi.fukHit}).length;
+    const dayHits=dayDone.filter(r=>getHitInfo(r).anyHit).length;
+    const dayFuk=0;
     const dayInv=dayDone.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
     const dayRet=dayDone.reduce((s,r)=>s+getHitInfo(r).ret,0);
     const dayProfit=dayRet-dayInv;
@@ -2012,7 +2001,7 @@ function renderList(){
         </div>
         <div style="text-align:right;flex-shrink:0">
           ${isSkip?`<div style="font-size:11px;color:var(--lt);font-weight:700">見送り</div>`
-          :hasR?`<div style="font-weight:900;font-size:12px;color:${hi.anyHit?'var(--grn)':'var(--red)'}">${hi.label==='的中'?'✓ 馬連':hi.label==='ワイド的中'?'◎ ワイド':hi.label==='複勝的中'?'△ 複勝':'✗'}</div>
+          :hasR?`<div style="font-weight:900;font-size:12px;color:${hi.anyHit?'var(--grn)':'var(--red)'}">${hi.anyHit?'✓ '+hi.label:'✗'}</div>
           <div style="font-size:11px;font-weight:700;color:${hi.ret>=inv?'var(--grn)':'var(--red)'}">${profitStr}</div>`
           :`<div style="font-size:11px;color:var(--gld);font-weight:700">未入力</div>`}
         </div>
@@ -2386,7 +2375,7 @@ function renderDetail(id){
     r.result.top3.forEach((n,i)=>{const hh=s.find(x=>x.num===+n);
       h+=`<span style="background:${i===0?'rgba(184,134,11,.12)':'var(--p2)'};padding:3px 10px;border:1px solid var(--bdr);font-size:13px;font-weight:700">${['1着','2着','3着'][i]}：<span style="color:var(--red)">${n}番</span>${hh?' '+hh.name:''}</span>`});
     h+=`</div>`;
-    h+=`<div style="font-size:16px;font-weight:900;color:${hi.anyHit?'var(--grn)':'var(--red)'};margin-bottom:6px">${hi.label==='的中'?'✓ 馬連的中！':hi.label==='ワイド的中'?'◎ ワイド的中！':hi.label==='複勝的中'?'△ 複勝的中':'✗ 不的中'}`;
+    h+=`<div style="font-size:16px;font-weight:900;color:${hi.anyHit?'var(--grn)':'var(--red)'};margin-bottom:6px">${hi.anyHit?'✓ '+hi.label+'！':'✗ 不的中'}`;
     const inv=hi.inv;const ret=hi.ret;const d=ret-inv;
     if(ret>0)h+=` <span style="font-size:13px;font-weight:500">回収：${ret.toLocaleString()}円 ／ 投資：${inv}円（${d>=0?'+'+d:d}円）</span>`;
     else h+=` <span style="font-size:13px;font-weight:500">投資：${inv}円（${d}円）</span>`;
@@ -2630,7 +2619,7 @@ function renderTrends(){
   // 通算成績
   h+=`<div class="pnl"><h3 class="b">📊 通算成績</h3>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">`;
-  [['レース数',t.tot+'R',''],['ワイド的中',t.hits+'R（'+t.rate+'%）',t.rate>=20?'var(--grn)':''],['複勝的中',t.fukHits+'R','var(--blu)']].forEach(([l,v,c])=>{
+  [['レース数',t.tot+'R',''],['的中',t.hits+'R（'+t.rate+'%）',t.rate>=20?'var(--grn)':''],['不的中',(t.tot-t.hits)+'R','var(--red)']].forEach(([l,v,c])=>{
     h+=`<div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center">
       <div style="font-size:11px;color:var(--dim)">${l}</div>
       <div style="font-size:18px;font-weight:700;${c?'color:'+c:''}">${v}</div>
