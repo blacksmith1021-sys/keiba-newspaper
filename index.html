@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.2.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.3.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -752,11 +752,17 @@ function genBet(scored,raceInfo){
   let B=axisPool[1]||(himoPool[0]||null);
   let C=himoPool.filter(h=>h!==A&&h!==B)[0]||axisPool.filter(h=>h!==A&&h!==B)[0]||null;
 
-  // ===== 見送り基準: topNs<70 / nsDiff<5 / 軸馬なし =====
+  // ===== 見送り基準: topNs<70 / nsDiff<5 / 軸馬なし / 予算超過 =====
   const topNs=scored[0]?.ns||0;
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
   const noAxis=!A;
-  const skipRecommended=topNs<70||nsDiff<5||noAxis;
+  // 予算超過チェック（当日の累計投資が予算上限に達していたら見送り）
+  let budgetOver=false;
+  if(typeof getDailyBudget==='function'&&typeof getTodayInvested==='function'){
+    const remaining=getDailyBudget()-getTodayInvested();
+    if(remaining<100)budgetOver=true;
+  }
+  const skipRecommended=topNs<70||nsDiff<5||noAxis||budgetOver;
 
   // 信頼度（表示用）
   const axisEv=A?.ev||0;
@@ -765,7 +771,7 @@ function genBet(scored,raceInfo){
   else if(axisEv>=0.5){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
 
-  const skipReason=noAxis?'軸馬候補なし(ns80以上かつ人気3番手以内が0頭)':topNs<70?'最高スコア不足('+topNs+')':'上位スコア差不足(差'+nsDiff+')';
+  const skipReason=budgetOver?'本日の予算上限に到達':noAxis?'軸馬候補なし(ns80以上かつ人気3番手以内が0頭)':topNs<70?'最高スコア不足('+topNs+')':'上位スコア差不足(差'+nsDiff+')';
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
@@ -781,32 +787,39 @@ function genBet(scored,raceInfo){
   const estU=eU(A,B);
   const estW=C?eW(B,C):0;
 
-  // 投資額を期待値ベースに(100円単位) EV=(ns/100)*odds-1
-  let umaAmt=0,wideAmt=0;
+  // ===== 資金管理: 100円×最大3点=300円上限、馬連orワイド =====
+  let tickets=[];
   if(!skipRecommended){
-    if(axisEv>=1.5){umaAmt=200;wideAmt=300}       // EV1.5以上→500円
-    else if(axisEv>=0.5){umaAmt=100;wideAmt=200}   // EV0.5以上→300円
-    else{umaAmt=100;wideAmt=200}                    // EV0.5未満でも購入(見送りでなければ)→300円
-  }
+    // 相手候補を集める（A以外でns50以上、最大3頭）
+    const partners=[B,C].filter(Boolean);
+    const extra=himoPool.filter(h=>h!==A&&h!==B&&h!==C).slice(0,1);
+    const allPartners=[...partners,...extra].slice(0,3);
 
-  const tickets=skipRecommended||umaAmt===0?[]:[
-    {type:'馬連',desc:A.num+'─'+B.num,amount:umaAmt,horses:[A,B],est:estU,
-     reason:'添え：'+A.num+'番─'+B.num+'番が1・2着で的中'},
-    ...(C?[{type:'ワイド',desc:B.num+'─'+C.num,amount:wideAmt,horses:[B,C],est:estW,
-     reason:'主軸：'+B.num+'番─'+C.num+'番'+(favIsOverrated?'（1番人気=過剰人気のため除外）':'（1番人気=実力馬のため含む可能性あり）')}]:[])
-  ];
-  const totalInv=(skipRecommended||umaAmt===0)?0:umaAmt+(C?wideAmt:0);
+    if(allPartners.length>=2){
+      // 馬連: 軸A × 相手（最大3点×100円）
+      allPartners.forEach(p=>{
+        tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],est:eU(A,p),
+          reason:A.num+'番─'+p.num+'番が1・2着で的中'});
+      });
+    }else if(allPartners.length===1){
+      // ワイド: A─B + B─C等（最大2点×100円）
+      tickets.push({type:'ワイド',desc:A.num+'─'+allPartners[0].num,amount:100,horses:[A,allPartners[0]],est:eW(A,allPartners[0]),
+        reason:A.num+'番─'+allPartners[0].num+'番が3着以内で的中'});
+    }
+  }
+  const totalInv=tickets.reduce((s,t)=>s+t.amount,0);
 
   // 戦略説明
   const favNote=favIsOverrated
-    ?'1番人気('+favOdds+'倍)は実力スコア'+(favInEligible?favStableRank+1+'位':'圏外')+'で過剰人気→除外'
-    :'1番人気('+favOdds+'倍)は実力スコア'+(favStableRank+1)+'位で実力通り';
-  const patName=(skipRecommended||umaAmt===0)?'見送り推奨':'ワイド主軸（B─C）＋馬連添え（A─B）';
-  const patReason=(skipRecommended||umaAmt===0)
+    ?'1番人気('+favOdds+'倍)は過剰人気→除外'
+    :'1番人気('+favOdds+'倍)は実力通り';
+  const betType=tickets.length>0?tickets[0].type:'';
+  const patName=skipRecommended?'見送り推奨':betType+'×'+tickets.length+'点('+totalInv+'円)';
+  const patReason=skipRecommended
     ?skipReason
-    :'軸A=EV'+axisEv+'(ns'+A.ns+'/'+A.pop+'番人気)。投資'+totalInv+'円。【'+favNote+'】';
+    :'軸A='+A.num+'番(ns'+A.ns+'/'+A.pop+'番人気/EV'+axisEv+')。'+patName+'。【'+favNote+'】';
 
-  const bestObj={type:'馬連',horses:[A,B],est:estU,ev:axisEv,prob:0,
+  const bestObj={type:betType,horses:[A,B],est:eU(A,B),ev:axisEv,prob:0,
     why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
 
   // レース質の警告文
@@ -819,7 +832,7 @@ function genBet(scored,raceInfo){
     fav:favHorse,excluded,confidence,confLevel,
     raceQuality,favIsOverrated,favIsLegit,
     fukushoHorse:A,
-    wideAmount:(!skipRecommended&&C)?wideAmt:0,fukAmount:0,totalInv,
+    wideAmount:0,fukAmount:0,totalInv,
     wideHorseB:B,wideHorseC:C,
     alternatives:[]
   };
@@ -1250,28 +1263,36 @@ function updatePhaseBanner(){
   document.querySelector('.ct').prepend(banner);
 }
 
+function getDailyBudget(){return loadSettings().dailyBudget||5000}
+function getTodayInvested(){
+  const today=new Date();
+  const todayStr=today.getFullYear()+'/'+(today.getMonth()+1)+'/'+today.getDate();
+  return RACES.filter(r=>r.info?.date===todayStr&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r)&&!getHitInfo(r).skip)
+    .reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
+}
+
 function updateTodaySummary(){
   const el=document.getElementById('todaySummary');if(!el)return;
   const today=new Date();
   const todayStr=today.getFullYear()+'/'+(today.getMonth()+1)+'/'+today.getDate();
   const todayRaces=RACES.filter(r=>r.info?.date===todayStr&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
   if(todayRaces.length===0){el.innerHTML='';return}
-  const done=todayRaces.filter(r=>r.result?.top3?.length>=3);
-  const bought=done.filter(r=>(getHitInfo(r).inv||0)>0);
+  const bought=todayRaces.filter(r=>!getHitInfo(r).skip&&(getHitInfo(r).inv||0)>0);
   const hits=bought.filter(r=>getHitInfo(r).anyHit);
   const inv=bought.reduce((s,r)=>s+(getHitInfo(r).inv||0),0);
   const ret=bought.reduce((s,r)=>s+getHitInfo(r).ret,0);
   const pnl=ret-inv;
   const roi=inv>0?Math.round(ret/inv*100):0;
+  const budget=getDailyBudget();
+  const remaining=budget-inv;
   el.innerHTML=`<div style="background:var(--p);border:2px solid var(--bdt);border-radius:4px;padding:8px 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
     <span style="font-weight:900;font-size:13px">本日</span>
-    <span>分析 <b>${todayRaces.length}</b>R</span>
     <span>購入 <b>${bought.length}</b>R</span>
     <span style="color:var(--grn)">的中 <b>${hits.length}</b></span>
     <span>投資 <b>${inv.toLocaleString()}円</b></span>
     <span>回収 <b>${ret.toLocaleString()}円</b></span>
     <span style="font-weight:900;font-size:15px;color:${pnl>=0?'var(--grn)':'var(--red)'}">${pnl>=0?'+':''}${pnl.toLocaleString()}円</span>
-    <span style="color:${roi>=100?'var(--grn)':'var(--red)'}">回収率 <b>${roi}%</b></span>
+    <span style="color:${remaining<1000?'var(--red)':'var(--dim)'}${remaining<1000?';font-weight:700':''}">残予算 <b>${remaining.toLocaleString()}円</b>${remaining<1000?' ⚠':''}/${budget.toLocaleString()}円</span>
   </div>`;
 }
 
@@ -1491,7 +1512,7 @@ function doAnalyze(){
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.2.0'};
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.3.0'};
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
   CUR=id;showView('detail');
@@ -2435,7 +2456,21 @@ function renderSyncView(){
   const lastSync=getLastSync();
   const fsConnected=!!_dirHandle;
   const ghConnected=!!token;
+  const budget=loadSettings().dailyBudget||5000;
   let h=`
+<div class="pnl">
+<h3>⚙️ 資金管理設定</h3>
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+<label style="font-size:13px;font-weight:700">1日の予算上限:</label>
+<input type="number" id="budgetInput" value="${budget}" min="1000" max="50000" step="1000" style="width:100px">
+<span style="font-size:13px">円</span>
+<button class="btn-s" onclick="const v=+document.getElementById('budgetInput').value;if(v>=1000){const s=loadSettings();s.dailyBudget=v;saveSettings(s);alert('予算を'+v+'円に設定しました');renderSyncView()}">保存</button>
+</div>
+<div style="font-size:11px;color:var(--dim);line-height:1.6">
+1レース最大300円（100円×3点）。累計が予算上限に達したら自動見送り。
+</div>
+</div>
+
 <div class="pnl">
 <h3 class="g">💾 ローカルファイル保存</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
@@ -2596,7 +2631,7 @@ async function doGhLoad(){
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
-  const SCORE_VER='v2.2.0';
+  const SCORE_VER='v2.3.0';
   HORSE_DB=buildHorseDB();
   let rescored=0;
   RACES.forEach(r=>{
