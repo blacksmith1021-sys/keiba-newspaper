@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.5.0 (2026-03-29)</div>
+<div class="hd-ver">ver 2.6.0 (2026-03-29)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -445,7 +445,33 @@ if(pr.fin===1)pr.gap=0;
 h.prev.push(pr)}
 // 日付の新しい順にソート（前走が[0]になるように）
 h.prev.sort((a,b)=>b.dateKey-a.dateKey);
-if(h.name&&h.num)r.horses.push(h)}return r}
+if(h.name&&h.num)r.horses.push(h)}
+// === オッズデータ解析（貼り付けテキストにオッズページが含まれていれば自動取得） ===
+r._marketOdds={umaren:{},wide:{}};
+// 馬連オッズ: "1 - 2 15.5" or "1-2\t15.5" or "1\t2\t15.5" パターン
+const umarenRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)/g;
+let um;while((um=umarenRe.exec(t))!==null){
+  const a=Math.min(+um[1],+um[2]),b=Math.max(+um[1],+um[2]);
+  r._marketOdds.umaren[a+'-'+b]=parseFloat(um[3].replace(',',''));
+}
+// ワイドオッズ: "1 - 2 4.5 - 6.8" (下限-上限) or "1-2\t4.5" パターン
+const wideRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)\s*[-ー－]\s*([\d,]+\.\d)/g;
+let wm;while((wm=wideRe.exec(t))!==null){
+  const a=Math.min(+wm[1],+wm[2]),b=Math.max(+wm[1],+wm[2]);
+  // ワイドは下限と上限の中央値を使用
+  r._marketOdds.wide[a+'-'+b]=Math.round((parseFloat(wm[3].replace(',',''))+parseFloat(wm[4].replace(',','')))/2*10)/10;
+}
+// ワイド単一値パターン: "1 - 2 4.5"（上限なし）
+if(Object.keys(r._marketOdds.wide).length===0){
+  const wideSingleRe=/(\d{1,2})\s*[-ー－]\s*(\d{1,2})\s+([\d,]+\.\d)(?!\s*[-ー－]\s*\d)/g;
+  let ws;while((ws=wideSingleRe.exec(t))!==null){
+    const a=Math.min(+ws[1],+ws[2]),b=Math.max(+ws[1],+ws[2]);
+    if(!r._marketOdds.umaren[a+'-'+b]){// 馬連と重複しないものだけ
+      r._marketOdds.wide[a+'-'+b]=parseFloat(ws[3].replace(',',''));
+    }
+  }
+}
+return r}
 
 // ===== SCORING =====
 function score(race){const hs=race.horses,inf=race.info,dist=inf.dist||1800,surf=inf.type||'ダート';
@@ -1312,32 +1338,10 @@ function showView(v){
 document.getElementById('vInput').innerHTML=`
 <div class="pnl"><h3 class="r">出馬表を貼り付けて分析</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:6px">※ ${CUTOFF_DATE} 以降のレースが対象です</div>
-<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け"></textarea>
+<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け&#10;&#10;※オッズページも続けて貼り付けると馬連・ワイドオッズも自動取得します"></textarea>
 <div id="analyzeError" class="hidden"></div>
 <div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
 
-<div id="oddsInputSection" class="hidden">
-<div class="pnl">
-<h3 class="b">📊 オッズ入力（任意）</h3>
-<div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
-買い目候補のオッズを入力すると、理論オッズとの比較・割安判定を表示します。<br>
-未入力でも予想・購入は通常通り動作します。
-</div>
-<div id="oddsTargetInfo" style="font-size:13px;font-weight:700;margin-bottom:8px"></div>
-<div style="display:flex;gap:12px;flex-wrap:wrap">
-<div style="flex:1;min-width:200px">
-<div style="font-size:12px;font-weight:700;margin-bottom:4px">馬連オッズ</div>
-<textarea id="oddsUmarenIn" rows="4" style="font-size:13px" placeholder="1-2：15.5&#10;1-3：22.0&#10;2-5：8.8"></textarea>
-</div>
-<div style="flex:1;min-width:200px">
-<div style="font-size:12px;font-weight:700;margin-bottom:4px">ワイドオッズ</div>
-<textarea id="oddsWideIn" rows="4" style="font-size:13px" placeholder="1-2：4.5&#10;1-3：6.2&#10;2-5：3.1"></textarea>
-</div>
-</div>
-<div style="margin-top:8px"><button class="btn btn-b" onclick="applyOddsInput()">オッズ反映</button></div>
-<div id="oddsResult" style="margin-top:8px"></div>
-</div>
-</div>
 
 <div class="pnl" style="border-top:2px solid var(--bdt)">
 <h3 class="b">📥 過去レース結果の一括取り込み（馬DB蓄積用）</h3>
@@ -1529,28 +1533,36 @@ function doAnalyze(){
   }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
+  const marketOdds=parsed._marketOdds||{umaren:{},wide:{}};
   const bet=genBet(scored,parsed.info);
   const id=Date.now().toString();
   const venue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.4.0'};
+  // オッズデータを_oddsInputに保存
+  const oddsInput={};
+  Object.entries(marketOdds.umaren).forEach(([k,v])=>{oddsInput['馬連_'+k]=String(v)});
+  Object.entries(marketOdds.wide).forEach(([k,v])=>{oddsInput['ワイド_'+k]=String(v)});
+  const hasOdds=Object.keys(oddsInput).length>0;
+  // 割高な買い目を除外（乖離率80%未満）
+  if(hasOdds&&bet.tickets){
+    bet.tickets=bet.tickets.filter(tk=>{
+      const nums=tk.horses.map(x=>x.num).sort((a,b)=>a-b);
+      const key=tk.type==='ワイド'?'ワイド_'+nums.join('-'):'馬連_'+nums.join('-');
+      const actual=parseFloat(oddsInput[key]);
+      if(!actual||!tk.est)return true; // オッズ不明なら残す
+      const ratio=actual/tk.est*100;
+      if(ratio<80){tk._excluded='割高('+Math.round(ratio)+'%)';return false}
+      return true;
+    });
+    bet.totalInv=bet.tickets.reduce((s,t)=>s+t.amount,0);
+    if(bet.totalInv===0)bet.skipRecommended=true;
+  }
+  const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v2.5.0',_oddsInput:hasOdds?oddsInput:undefined,_marketOdds:hasOdds?marketOdds:undefined};
+  const oddsMsg=hasOdds?'（馬連'+Object.keys(marketOdds.umaren).length+'組/ワイド'+Object.keys(marketOdds.wide).length+'組のオッズを取得）':'';
   RACES.unshift(race);saveR(RACES);
   document.getElementById('raceIn').value='';
-  // オッズ入力セクションを展開
-  const oddsSection=document.getElementById('oddsInputSection');
-  if(oddsSection){
-    oddsSection.classList.remove('hidden');
-    oddsSection.dataset.raceId=id;
-    const info=document.getElementById('oddsTargetInfo');
-    if(info){
-      const tks=bet.tickets||[];
-      let txt=label+'<br>買い目候補: ';
-      txt+=tks.length>0?tks.map(t=>t.type+' '+t.desc).join('、'):'（見送り）';
-      info.innerHTML=txt;
-    }
-  }
   CUR=id;showView('detail');
   }catch(e){alert('分析エラー: '+e.message+'\n'+e.stack)}
 }
@@ -2600,66 +2612,6 @@ async function doConnectFolder(){
   renderSyncView();
 }
 
-// オッズテキストパース: "1-2：15.5" or "1-2:15.5" or "1-2 15.5"
-function parseOddsText(text){
-  const map={};
-  text.split('\n').forEach(line=>{
-    const m=line.trim().match(/(\d+)\s*[-ー－]\s*(\d+)\s*[：:]\s*([\d.]+)/);
-    if(m){
-      const a=Math.min(+m[1],+m[2]),b=Math.max(+m[1],+m[2]);
-      map[a+'-'+b]=parseFloat(m[3]);
-    }
-  });
-  return map;
-}
-
-// 入力タブからのオッズ反映
-function applyOddsInput(){
-  const section=document.getElementById('oddsInputSection');
-  const raceId=section?.dataset.raceId;
-  const r=RACES.find(x=>x.id===raceId);
-  if(!r){alert('レースが見つかりません');return}
-
-  const umaText=document.getElementById('oddsUmarenIn').value;
-  const wideText=document.getElementById('oddsWideIn').value;
-  const umaOdds=parseOddsText(umaText);
-  const wideOdds=parseOddsText(wideText);
-
-  if(!r._oddsInput)r._oddsInput={};
-  // 保存
-  Object.entries(umaOdds).forEach(([k,v])=>{r._oddsInput['馬連_'+k]=String(v)});
-  Object.entries(wideOdds).forEach(([k,v])=>{r._oddsInput['ワイド_'+k]=String(v)});
-  saveR(RACES);
-
-  // 結果テーブルを生成
-  const tks=r.bet?.tickets||[];
-  let html='<div style="font-weight:700;font-size:13px;margin-bottom:6px;color:var(--grn)">✓ オッズを反映しました</div>';
-  if(tks.length>0){
-    html+='<table style="width:100%;font-size:12px;border-collapse:collapse">';
-    html+='<tr style="background:var(--ink);color:var(--p)"><th style="padding:4px 8px;text-align:left">買い目</th><th style="padding:4px 8px">理論</th><th style="padding:4px 8px">実際</th><th style="padding:4px 8px">乖離率</th><th style="padding:4px 8px">判定</th></tr>';
-    tks.forEach(tk=>{
-      const nums=tk.horses.map(x=>x.num).sort((a,b)=>a-b);
-      const key=nums.join('-');
-      const actual=tk.type==='馬連'?umaOdds[key]:wideOdds[key];
-      const theo=tk.est;
-      const ratio=actual&&theo?Math.round(actual/theo*100):0;
-      const judge=ratio===0?'-':ratio>=120?'★ 割安':ratio>=80?'適正':'割高・除外';
-      const col=ratio===0?'var(--dim)':ratio>=120?'var(--grn)':ratio>=80?'var(--dim)':'var(--red)';
-      html+=`<tr style="border-bottom:1px solid var(--bdr)">
-        <td style="padding:4px 8px;font-weight:700">${tk.type} ${tk.desc}</td>
-        <td style="padding:4px 8px;text-align:center">${theo.toFixed(1)}倍</td>
-        <td style="padding:4px 8px;text-align:center;font-weight:700">${actual?actual.toFixed(1)+'倍':'-'}</td>
-        <td style="padding:4px 8px;text-align:center">${ratio>0?ratio+'%':'-'}</td>
-        <td style="padding:4px 8px;text-align:center;font-weight:700;color:${col}">${judge}</td>
-      </tr>`;
-    });
-    html+='</table>';
-  }else{
-    html+='<div style="font-size:12px;color:var(--dim)">見送りレースのため買い目なし</div>';
-  }
-  document.getElementById('oddsResult').innerHTML=html;
-}
-
 // 詳細画面からのオッズ入力保存
 function saveOddsInput(raceId,inputEl){
   const r=RACES.find(x=>x.id===raceId);if(!r)return;
@@ -2778,7 +2730,7 @@ async function doGhLoad(){
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
-  const SCORE_VER='v2.3.0';
+  const SCORE_VER='v2.5.0';
   HORSE_DB=buildHorseDB();
   let rescored=0;
   RACES.forEach(r=>{
