@@ -104,7 +104,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.6.1 (2026-03-29)</div>
+<div class="hd-ver">ver 2.7.0 (2026-04-03)</div>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -231,12 +231,14 @@ function saveR(r){
   if(_dirHandle)_scheduleWrite('races.json',json);
   HORSE_DB=buildHorseDB();
   updateCountBadge();
+  scheduleGistSync().catch(()=>{});
 }
 function loadHorseStore(){try{return JSON.parse(localStorage.getItem(HK))||{}}catch{return{}}}
 function saveHorseStore(db){
   const json=JSON.stringify(db);
   try{localStorage.setItem(HK,json)}catch(e){console.error('馬DB保存エラー:',e)}
   if(_dirHandle)_scheduleWrite('horse_store.json',json);
+  scheduleGistSync().catch(()=>{});
 }
 function loadSettings(){try{return JSON.parse(localStorage.getItem(SETTINGS_KEY))||{}}catch{return{}}}
 function saveSettings(s){
@@ -267,6 +269,7 @@ function showSaveStatus(msg,type){
 
 // --- 自動保存（分析・結果保存後に呼び出す） ---
 async function autoSaveAll(){
+  scheduleGistSync().catch(()=>{});
   if(!_dirHandle){return} // フォルダ未接続時はlocalStorageのみ（saveR等で保存済み）
   showSaveStatus('💾 保存中...','saving');
   try{
@@ -1029,7 +1032,7 @@ function parseResult(text,horses){
     // タイム
     sm=fullText.match(/(\d:\d{2}\.\d)/);if(sm)time=sm[1];
     // 騎手名
-    sm=fullText.match(/(?:\d+\.\d)[\t\s]+([▲△☆◇]?[一-龥]+[\s　]*[一-龥ぁ-ん]+)/);if(sm)jockey=sm[1].replace(/[▲△☆◇]/g,'').trim();
+    sm=fullText.match(/(?:牡|牝|せん)\d[\t\s]+\d+\.\d[\t\s]+([▲△☆◇★]?[^\t\d:（(][^\t:（(]*?)[\t]/);if(sm)jockey=sm[1].replace(/[▲△☆◇★]/g,'').trim();
     // 着差（タイムの後のトークン）
     sm=fullText.match(/\d:\d{2}\.\d[\t\s]+([\S]+)/);
     if(sm&&!sm[1].match(/^\d|^枠|^[一-龥]/))margin=sm[1];
@@ -3139,86 +3142,164 @@ function renderTrends(){
   document.getElementById('vTrends').innerHTML=h;
 }
 
-// ===== CLOUD SYNC (GitHub API) =====
-const GH_REPO='blacksmith1021-sys/keiba-newspaper';
+// ===== CLOUD SYNC (GitHub Gist API) =====
 const GH_API='https://api.github.com';
 const GH_TOKEN_IDB_KEY='ghToken';
+const GIST_ID_IDB_KEY='gistId';
 
-// トークン: IndexedDB(キャッシュ削除に強い) + localStorage両方に保持
+// --- トークン・Gist ID の永続化 (localStorage + IndexedDB 二重保存) ---
 function getGhToken(){return loadSettings().ghToken||''}
+function getGistId(){return loadSettings().gistId||''}
 function setGhToken(t){
   const s=loadSettings();s.ghToken=t;saveSettings(s);
   _idbSave(GH_TOKEN_IDB_KEY,t).catch(()=>{});
 }
+function setGistId(id){
+  const s=loadSettings();s.gistId=id;saveSettings(s);
+  _idbSave(GIST_ID_IDB_KEY,id).catch(()=>{});
+}
 async function restoreGhToken(){
-  // localStorageにあればそれを使う
   const ls=getGhToken();if(ls)return ls;
-  // なければIndexedDBから復元
-  try{
-    const t=await _idbLoad(GH_TOKEN_IDB_KEY);
-    if(t){const s=loadSettings();s.ghToken=t;saveSettings(s);return t}
-  }catch{}
+  try{const t=await _idbLoad(GH_TOKEN_IDB_KEY);if(t){setGhToken(t);return t}}catch{}
   return '';
 }
-
-// GitHub自動復元: ローカルデータが空でトークンがあれば自動取得
-async function autoRestoreFromGithub(){
-  const token=await restoreGhToken();
-  if(!token)return false;
-  // ローカルにデータがあれば復元不要
-  const localRaces=RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_'));
-  if(localRaces.length>0&&Object.keys(HORSE_STORE).length>0)return false;
-  // GitHubからデータ取得を試行
-  try{
-    console.log('GitHub自動復元を開始...');
-    const [rFile,hFile]=await Promise.all([
-      ghGet('data/races.json',token),
-      ghGet('data/horse_store.json',token)
-    ]);
-    if(!rFile)return false;
-    const races=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
-    if(races.length<=RACES.length)return false; // リモートの方が少なければ不要
-    RACES=races;saveR(RACES);
-    if(hFile){
-      HORSE_STORE=JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,'')))));
-      saveHorseStore(HORSE_STORE);
-    }
-    HORSE_DB=buildHorseDB();
-    console.log('GitHub自動復元完了: '+RACES.length+'レース, '+Object.keys(HORSE_STORE).length+'頭');
-    return true;
-  }catch(e){console.warn('GitHub自動復元失敗:',e.message);return false}
+async function restoreGistId(){
+  const ls=getGistId();if(ls)return ls;
+  try{const id=await _idbLoad(GIST_ID_IDB_KEY);if(id){setGistId(id);return id}}catch{}
+  return '';
 }
-function getLastSync(){const s=loadSettings();return s.lastSync||''}
+function getLastSync(){return loadSettings().lastSync||''}
 function setLastSync(t){const s=loadSettings();s.lastSync=t;saveSettings(s)}
 
-// --- GitHub API helpers ---
-async function ghGet(path,token){
-  const res=await fetch(`${GH_API}/repos/${GH_REPO}/contents/${path}`,{
+// --- Gist API helpers ---
+async function gistGet(gistId,token){
+  const res=await fetch(`${GH_API}/gists/${gistId}`,{
     headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json'}
   });
   if(res.status===404)return null;
-  if(!res.ok)throw new Error(`GitHub GET ${res.status}: ${(await res.json()).message}`);
+  if(!res.ok)throw new Error(`Gist GET ${res.status}: ${(await res.json()).message}`);
   return await res.json();
 }
-async function ghPut(path,content,token,sha){
-  const body={message:`sync: update ${path}`,content:btoa(unescape(encodeURIComponent(content)))};
-  if(sha)body.sha=sha;
-  const res=await fetch(`${GH_API}/repos/${GH_REPO}/contents/${path}`,{
-    method:'PUT',
+async function gistCreate(token){
+  const res=await fetch(`${GH_API}/gists`,{
+    method:'POST',
     headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'},
-    body:JSON.stringify(body)
+    body:JSON.stringify({
+      description:'競馬ファクター新聞 データ保存',
+      public:false,
+      files:{
+        'races.json':{content:JSON.stringify(RACES)||'[]'},
+        'horse_store.json':{content:JSON.stringify(HORSE_STORE)||'{}'},
+        'settings.json':{content:JSON.stringify(loadSettings())||'{}'}
+      }
+    })
   });
-  if(!res.ok){const e=await res.json();throw new Error(`GitHub PUT ${res.status}: ${e.message}`)}
+  if(!res.ok){const e=await res.json();throw new Error(`Gist POST ${res.status}: ${e.message}`)}
   return await res.json();
+}
+async function gistUpdate(gistId,token){
+  const res=await fetch(`${GH_API}/gists/${gistId}`,{
+    method:'PATCH',
+    headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'},
+    body:JSON.stringify({
+      files:{
+        'races.json':{content:JSON.stringify(RACES)},
+        'horse_store.json':{content:JSON.stringify(HORSE_STORE)},
+        'settings.json':{content:JSON.stringify(loadSettings())}
+      }
+    })
+  });
+  if(!res.ok){const e=await res.json();throw new Error(`Gist PATCH ${res.status}: ${e.message}`)}
+  return await res.json();
+}
+function gistParseFile(gistData,filename){
+  const f=gistData?.files?.[filename];
+  return f?.content||null;
 }
 
+// --- 自動バックアップ（デバウンス付き） ---
+let _gistSyncTimer=null;
+async function scheduleGistSync(){
+  if(_gistSyncTimer)clearTimeout(_gistSyncTimer);
+  _gistSyncTimer=setTimeout(async()=>{
+    const token=await restoreGhToken();
+    const gistId=await restoreGistId();
+    if(!token||!gistId)return;
+    try{
+      await gistUpdate(gistId,token);
+      setLastSync(new Date().toLocaleString('ja-JP'));
+      showSaveStatus('☁️ Gist同期完了','ok');
+    }catch(e){
+      console.warn('Gist自動同期失敗:',e.message);
+    }
+  },2000);
+}
+
+// --- Gist自動復元: ローカルデータが空でトークン+GistIDがあれば自動取得 ---
+async function autoRestoreFromGithub(){
+  const token=await restoreGhToken();
+  const gistId=await restoreGistId();
+  if(!token||!gistId)return false;
+  try{
+    console.log('Gist自動復元を試行中...');
+    const gist=await gistGet(gistId,token);
+    if(!gist)return false;
+    const rJson=gistParseFile(gist,'races.json');
+    const hJson=gistParseFile(gist,'horse_store.json');
+    if(!rJson)return false;
+    const remoteRaces=JSON.parse(rJson);
+    const remoteHorses=hJson?JSON.parse(hJson):{};
+    let restored=false;
+    if(remoteRaces.length>RACES.length){
+      RACES=remoteRaces;
+      try{localStorage.setItem(SK,rJson)}catch{}
+      restored=true;
+    }
+    if(Object.keys(remoteHorses).length>Object.keys(HORSE_STORE).length){
+      HORSE_STORE=remoteHorses;
+      try{localStorage.setItem(HK,hJson)}catch{}
+      restored=true;
+    }
+    if(restored){
+      HORSE_DB=buildHorseDB();
+      console.log(`Gist自動復元完了: ${RACES.length}レース, ${Object.keys(HORSE_STORE).length}頭`);
+    }
+    return restored;
+  }catch(e){console.warn('Gist自動復元失敗:',e.message);return false}
+}
+
+// --- 同期UI ---
 function renderSyncView(){
   const token=getGhToken();
+  const gistId=getGistId();
   const lastSync=getLastSync();
   const fsConnected=!!_dirHandle;
-  const ghConnected=!!token;
-  const budget=loadSettings().dailyBudget||5000;
+  const gistConnected=!!token&&!!gistId;
   let h=`
+<div class="pnl">
+<h3 class="b">☁️ Gistクラウド同期</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
+レースデータ・馬DBをGitHub Gist（シークレット）にバックアップします。<br>
+ブラウザのキャッシュを削除してもデータを復元できます。
+</div>
+<div style="margin-bottom:8px"><b style="font-size:13px">GitHub Personal Access Token:</b></div>
+<input type="password" class="sync-url" id="ghTokenInput" value="${token}" placeholder="ghp_xxxxx（gistスコープ必須）">
+<div style="margin-top:6px;font-size:11px;color:var(--dim)">
+<a href="https://github.com/settings/tokens/new?scopes=gist&description=keiba-newspaper-sync" target="_blank" style="color:var(--blu)">トークン発行ページ</a>
+ — gistにチェック → Generate token → 上にペースト
+</div>
+<div style="margin-top:10px;margin-bottom:8px"><b style="font-size:13px">Gist ID:</b></div>
+<input type="text" class="sync-url" id="gistIdInput" value="${gistId}" placeholder="初回は空欄のまま「新規作成」してください">
+<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+${!gistId?'<button class="btn btn-b" onclick="doGistCreate()" id="syncCreateBtn">✨ 新規Gist作成</button>':''}
+<button class="btn btn-b" onclick="doGhSave()" id="syncSaveBtn" ${!gistId?'style="display:none"':''}>📤 Gistに保存</button>
+<button class="btn btn-s" onclick="doGhLoad()" id="syncLoadBtn" ${!gistId?'style="display:none"':''}>📥 Gistから復元</button>
+</div>
+${gistConnected?'<div style="margin-top:8px;font-size:12px;color:var(--grn);font-weight:700">✅ データ保存時に自動同期されます</div>':''}
+<div id="syncStatus"></div>
+${lastSync?`<div class="sync-time">最終同期: ${lastSync}</div>`:''}
+</div>
+
 <div class="pnl">
 <h3 class="g">💾 ローカルファイル保存</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
@@ -3237,26 +3318,6 @@ ${fsConnected?'<div style="margin-top:6px;font-size:11px;color:var(--lt)">保存
 </div>
 
 <div class="pnl">
-<h3 class="b">☁️ GitHubクラウド同期</h3>
-<div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
-レースデータ・馬DBをGitHubリポジトリにバックアップできます。<br>
-どの端末からでもデータを復元できます。
-</div>
-<div style="margin-bottom:8px"><b style="font-size:13px">GitHub Personal Access Token:</b></div>
-<input type="password" class="sync-url" id="ghTokenInput" value="${token}" placeholder="ghp_xxxxx（repoスコープ必須）">
-<div style="margin-top:6px;font-size:11px;color:var(--dim)">
-<a href="https://github.com/settings/tokens/new?scopes=repo&description=keiba-newspaper-sync" target="_blank" style="color:var(--blu)">トークン発行ページ</a>
- — repoにチェック → Generate token → 上にペースト
-</div>
-<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-<button class="btn btn-b" onclick="doGhSave()" id="syncSaveBtn">📤 GitHubに保存</button>
-<button class="btn btn-s" onclick="doGhLoad()" id="syncLoadBtn">📥 GitHubから復元</button>
-</div>
-<div id="syncStatus"></div>
-${lastSync?`<div class="sync-time">最終同期: ${lastSync}</div>`:''}
-</div>
-
-<div class="pnl">
 <h3 style="color:var(--grn)">📂 検証CSV取込・復元</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
 検証データCSV（keiba_analysis_*.csv）を取り込んで、レースデータを復元します。<br>
@@ -3269,7 +3330,7 @@ ${lastSync?`<div class="sync-time">最終同期: ${lastSync}</div>`:''}
 <h3>データ状況</h3>
 <div style="font-size:13px;line-height:1.8">
 ストレージ: <b>${fsConnected?'ファイル + localStorage':'localStorage のみ'}</b>
-${ghConnected?' / <span class="fs-badge fs-on">GitHub連携 ON</span>':''}<br>
+${gistConnected?' / <span class="fs-badge fs-on">Gist連携 ON</span>':''}<br>
 レース数: <b>${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}</b> 件（予想）/ <b>${RACES.filter(r=>r.id?.startsWith('bulk_')).length}</b> 件（一括取込）/ <b>${RACES.filter(r=>r.id?.startsWith('csv_')).length}</b> 件（CSV取込）<br>
 馬DB: <b>${Object.keys(HORSE_STORE).length}</b> 頭
 </div>
@@ -3293,71 +3354,93 @@ async function doConnectFolder(){
   renderSyncView();
 }
 
-
 function showSyncStatus(msg,type){
   const el=document.getElementById('syncStatus');
   if(!el)return;
   el.innerHTML=`<div class="sync-status sync-${type}">${msg}</div>`;
 }
 
-async function doGhSave(){
+async function doGistCreate(){
   const token=document.getElementById('ghTokenInput').value.trim();
   if(!token){showSyncStatus('トークンを入力してください','err');return}
   setGhToken(token);
-  // 空データの上書き防止
-  if(RACES.length===0&&Object.keys(HORSE_STORE).length===0){
-    showSyncStatus('❌ ローカルにデータがありません。空データでGitHubを上書きすることはできません。','err');return;
+  const btn=document.getElementById('syncCreateBtn');
+  btn.disabled=true;btn.textContent='⏳ 作成中...';
+  try{
+    const gist=await gistCreate(token);
+    setGistId(gist.id);
+    const now=new Date().toLocaleString('ja-JP');
+    setLastSync(now);
+    showSyncStatus(`✅ Gist作成完了！<br>Gist ID: <code style="font-size:11px;user-select:all">${gist.id}</code><br><a href="${gist.html_url}" target="_blank" style="color:var(--blu);font-size:12px">Gistを開く</a>`,'ok');
+    renderSyncView();
+  }catch(e){
+    showSyncStatus('❌ エラー: '+e.message,'err');
+  }finally{
+    btn.disabled=false;btn.textContent='✨ 新規Gist作成';
   }
-  // リモートにデータが存在する場合、ローカルの方が少なければ警告
+}
+
+async function doGhSave(){
+  const token=document.getElementById('ghTokenInput').value.trim();
+  const gistId=document.getElementById('gistIdInput').value.trim();
+  if(!token){showSyncStatus('トークンを入力してください','err');return}
+  if(!gistId){showSyncStatus('Gist IDを入力してください。初回は「新規Gist作成」を押してください。','err');return}
+  setGhToken(token);setGistId(gistId);
+  if(RACES.length===0&&Object.keys(HORSE_STORE).length===0){
+    showSyncStatus('❌ ローカルにデータがありません。空データでGistを上書きすることはできません。','err');return;
+  }
   const btn=document.getElementById('syncSaveBtn');
   btn.disabled=true;btn.textContent='⏳ 確認中...';
   try{
-    const rExist=await ghGet('data/races.json',token);
-    const hExist=await ghGet('data/horse_store.json',token);
-    if(rExist){
-      try{
-        const remote=JSON.parse(decodeURIComponent(escape(atob(rExist.content.replace(/\n/g,'')))));
-        if(remote.length>0&&RACES.length<remote.length){
-          if(!confirm(`⚠️ GitHubにはレース${remote.length}件ありますが、ローカルは${RACES.length}件です。\nデータが減ります。本当に上書きしますか？`)){
-            btn.disabled=false;btn.textContent='📤 GitHubに保存';return;
+    const existing=await gistGet(gistId,token);
+    if(existing){
+      const rJson=gistParseFile(existing,'races.json');
+      if(rJson){
+        try{
+          const remote=JSON.parse(rJson);
+          if(remote.length>0&&RACES.length<remote.length){
+            if(!confirm(`⚠️ Gistにはレース${remote.length}件ありますが、ローカルは${RACES.length}件です。\nデータが減ります。本当に上書きしますか？`)){
+              btn.disabled=false;btn.textContent='📤 Gistに保存';return;
+            }
           }
-        }
-      }catch{}
+        }catch{}
+      }
     }
     btn.textContent='⏳ 保存中...';
-    showSyncStatus('GitHubにアップロード中...','info');
-    await ghPut('data/races.json',JSON.stringify(RACES),token,rExist?.sha);
-    await ghPut('data/horse_store.json',JSON.stringify(HORSE_STORE),token,hExist?.sha);
+    showSyncStatus('Gistにアップロード中...','info');
+    await gistUpdate(gistId,token);
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
     showSyncStatus(`✅ 保存完了！ レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭<br><span class="sync-time">保存日時: ${now}</span>`,'ok');
   }catch(e){
     showSyncStatus('❌ エラー: '+e.message,'err');
   }finally{
-    btn.disabled=false;btn.textContent='📤 GitHubに保存';
+    btn.disabled=false;btn.textContent='📤 Gistに保存';
   }
 }
 
 async function doGhLoad(){
   const token=document.getElementById('ghTokenInput').value.trim();
+  const gistId=document.getElementById('gistIdInput').value.trim();
   if(!token){showSyncStatus('トークンを入力してください','err');return}
-  setGhToken(token);
+  if(!gistId){showSyncStatus('Gist IDを入力してください','err');return}
+  setGhToken(token);setGistId(gistId);
   const btn=document.getElementById('syncLoadBtn');
   btn.disabled=true;btn.textContent='⏳ 確認中...';
-  showSyncStatus('GitHubのデータを確認中...','info');
+  showSyncStatus('Gistのデータを確認中...','info');
   try{
-    const [rFile,hFile]=await Promise.all([
-      ghGet('data/races.json',token),
-      ghGet('data/horse_store.json',token)
-    ]);
-    if(!rFile)throw new Error('データが見つかりません。先にGitHubに保存してください。');
-    const remoteRaces=JSON.parse(decodeURIComponent(escape(atob(rFile.content.replace(/\n/g,'')))));
-    const remoteHorses=hFile?JSON.parse(decodeURIComponent(escape(atob(hFile.content.replace(/\n/g,''))))):{};
+    const gist=await gistGet(gistId,token);
+    if(!gist)throw new Error('Gistが見つかりません。Gist IDを確認してください。');
+    const rJson=gistParseFile(gist,'races.json');
+    const hJson=gistParseFile(gist,'horse_store.json');
+    if(!rJson)throw new Error('Gistにレースデータがありません。先にGistに保存してください。');
+    const remoteRaces=JSON.parse(rJson);
+    const remoteHorses=hJson?JSON.parse(hJson):{};
     if(remoteRaces.length===0&&Object.keys(remoteHorses).length===0){
-      throw new Error('GitHubのデータが空です（レース0件、馬DB0頭）。先にデータがある状態で保存してください。');
+      throw new Error('Gistのデータが空です（レース0件、馬DB0頭）。');
     }
-    if(!confirm(`GitHubのデータで上書きします。\n\nリモート: レース${remoteRaces.length}件, 馬DB${Object.keys(remoteHorses).length}頭\nローカル: レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭\n\n実行しますか？`))
-    {btn.disabled=false;btn.textContent='📥 GitHubから復元';return}
+    if(!confirm(`Gistのデータで上書きします。\n\nリモート: レース${remoteRaces.length}件, 馬DB${Object.keys(remoteHorses).length}頭\nローカル: レース${RACES.length}件, 馬DB${Object.keys(HORSE_STORE).length}頭\n\n実行しますか？`))
+    {btn.disabled=false;btn.textContent='📥 Gistから復元';return}
     btn.textContent='⏳ 読込中...';
     RACES=remoteRaces;
     saveR(RACES);
@@ -3371,7 +3454,7 @@ async function doGhLoad(){
   }catch(e){
     showSyncStatus('❌ エラー: '+e.message,'err');
   }finally{
-    btn.disabled=false;btn.textContent='📥 GitHubから復元';
+    btn.disabled=false;btn.textContent='📥 Gistから復元';
   }
 }
 
@@ -3380,12 +3463,12 @@ async function doGhLoad(){
   // 1. ファイルストレージ自動復元
   const fsOk=await initFileStorage();
   if(fsOk)console.log('ファイルストレージ接続済み');
-  // 2. GitHub自動復元（ローカルが空の場合のみ）
+  // 2. Gist自動復元（ローカルが空の場合のみ）
   const ghRestored=await autoRestoreFromGithub();
   if(ghRestored){
     const banner=document.createElement('div');
     banner.style.cssText='position:fixed;top:0;left:0;right:0;background:var(--grn);color:#fff;text-align:center;padding:10px;font-size:13px;font-weight:700;z-index:9999;';
-    banner.textContent='✅ GitHubからデータを自動復元しました（'+RACES.length+'レース）';
+    banner.textContent='✅ Gistからデータを自動復元しました（'+RACES.length+'レース）';
     document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
