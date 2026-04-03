@@ -1283,7 +1283,7 @@ function analyzeLoss(rd,top3){
 
 // ===== TRENDS =====
 function getTrends(){
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  const done=RACES.filter(r=>r.result?.top3?.length>=3);
   if(done.length<2)return null;
   const tot=done.length;
   const hits=done.filter(r=>getHitInfo(r).anyHit).length;
@@ -1365,7 +1365,7 @@ function getTrends(){
 let CUR=null; // current race id
 
 function getPhaseInfo(){
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  const done=RACES.filter(r=>r.result?.top3?.length>=3);
   const count=done.length;
   // v4.1以降（レース質3パターン）で分析されたレースをカウント
   const v4races=done.filter(r=>r.bet?.patReason?.includes('レース質：')).length;
@@ -1860,7 +1860,7 @@ function renderList(){
   const pastDates=dates.slice(1);
   
   // 通算収支（見送り・取込を除外）
-  const allAnalyzed=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!isPastOnly(r));
+  const allAnalyzed=RACES.filter(r=>r.result?.top3?.length>=3);
   const skipped=allAnalyzed.filter(r=>getHitInfo(r).skip).length;
   const done=allAnalyzed.filter(r=>!getHitInfo(r).skip);
   const hits=done.filter(r=>getHitInfo(r).anyHit).length;
@@ -2142,7 +2142,7 @@ function downloadCSV(){
     ]);
   });
   // 合計行
-  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')&&!getHitInfo(r).skip);
+  const done=RACES.filter(r=>r.result?.top3?.length>=3&&!getHitInfo(r).skip);
   const totalBet=done.reduce((s,r)=>s+getHitInfo(r).inv,0);
   const totalRet=done.reduce((s,r)=>s+getHitInfo(r).ret,0);
   rows.push([]);
