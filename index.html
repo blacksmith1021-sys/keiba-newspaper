@@ -2960,9 +2960,42 @@ function deleteRace(id){
 }
 
 // === TRENDS ===
+function getTrendsFilter(){
+  return {
+    venue:document.getElementById('filterVenue')?.value||'',
+    dist:document.getElementById('filterDist')?.value||'',
+    surf:document.getElementById('filterSurf')?.value||''
+  };
+}
+function clearTrendsFilter(){
+  ['filterVenue','filterDist','filterSurf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});
+  renderTrends();
+}
 function renderTrends(){
   const t=getTrends();
+  const f=getTrendsFilter();
   let h='';
+
+  // フィルターUI
+  const venues=[...new Set(RACES.map(r=>(r.info?.course||'').replace(/\d+回/,'').replace(/\d+日/,'')).filter(Boolean))].sort();
+  const dists=[...new Set(RACES.map(r=>r.info?.dist).filter(Boolean))].sort((a,b)=>a-b);
+  h+=`<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+  <select id="filterVenue" style="padding:8px;border:1px solid var(--bdr);border-radius:4px;background:var(--p2);font-size:13px;font-family:'Noto Sans JP',sans-serif">
+    <option value="">競馬場：全て</option>
+    ${venues.map(v=>`<option value="${v}"${f.venue===v?' selected':''}>${v}</option>`).join('')}
+  </select>
+  <select id="filterDist" style="padding:8px;border:1px solid var(--bdr);border-radius:4px;background:var(--p2);font-size:13px;font-family:'Noto Sans JP',sans-serif">
+    <option value="">距離：全て</option>
+    ${dists.map(d=>`<option value="${d}"${f.dist===String(d)?' selected':''}>${d}m</option>`).join('')}
+  </select>
+  <select id="filterSurf" style="padding:8px;border:1px solid var(--bdr);border-radius:4px;background:var(--p2);font-size:13px;font-family:'Noto Sans JP',sans-serif">
+    <option value="">馬場：全て</option>
+    <option value="芝"${f.surf==='芝'?' selected':''}>芝</option>
+    <option value="ダート"${f.surf==='ダート'?' selected':''}>ダート</option>
+  </select>
+  <button class="btn-s" onclick="renderTrends()">絞り込む</button>
+  <button class="btn-s" onclick="clearTrendsFilter()">リセット</button>
+  </div>`;
 
   // フェーズ進捗バナー
   const pi=getPhaseInfo();
@@ -3021,33 +3054,36 @@ function renderTrends(){
   </div>`;
   h+=`</div>`;
 
-  // === 蓄積データ統計（全レースデータ＋HORSE_STOREから集計） ===
-  const accJockey={},accTrainer={},accWaku={},accPop={};
-  // ソース1: RACES内の全レース（bulk含む）
-  RACES.forEach(r=>{
+  // === 蓄積データ統計（フィルター適用＋HORSE_STOREから集計） ===
+  const filteredRaces=RACES.filter(r=>{
+    const venue=(r.info?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+    if(f.venue&&venue!==f.venue)return false;
+    if(f.dist&&String(r.info?.dist||'')!==f.dist)return false;
+    if(f.surf&&(r.info?.type||'')!==f.surf)return false;
+    return (r.result?.allResults?.length>0)||(r.result?.top3?.length>=3);
+  });
+  const filterLabel=[f.venue,f.dist?f.dist+'m':'',f.surf].filter(Boolean).join(' / ');
+  if(filterLabel){
+    h+=`<div style="background:rgba(26,68,136,.08);border:1px solid var(--blu);padding:8px 12px;border-radius:4px;margin-bottom:8px;font-size:13px;color:var(--blu);font-weight:700">絞り込み中：${filterLabel}（該当 ${filteredRaces.length} レース）</div>`;
+  }
+  const accJockey={},accTrainer={},accPop={};
+  // ソース1: フィルター済みRACES
+  filteredRaces.forEach(r=>{
     const allRes=r.result?.allResults||[];
     const scored=r.scored||[];
     const top3=r.result?.top3?.map(n=>+n)||[];
-    // allResultsがある場合はそこから
     if(allRes.length>0){
       allRes.forEach(ar=>{
         const rank=ar.rank||0;if(!rank)return;
         const horse=scored.find(h=>h.num===ar.num);
-        // 騎手
         const jk=ar.jockey||horse?.jk;
         if(jk){if(!accJockey[jk])accJockey[jk]={total:0,w1:0,w2:0,w3:0,w5:0};const s=accJockey[jk];s.total++;if(rank===1)s.w1++;if(rank<=2)s.w2++;if(rank<=3)s.w3++;if(rank<=5)s.w5++}
-        // 調教師
         const tr=ar.trainer||horse?.trainer;
         if(tr){if(!accTrainer[tr])accTrainer[tr]={total:0,w1:0,w2:0,w3:0,w5:0};const s=accTrainer[tr];s.total++;if(rank===1)s.w1++;if(rank<=2)s.w2++;if(rank<=3)s.w3++;if(rank<=5)s.w5++}
-        // 枠番
-        const wk=horse?.waku||0;
-        if(wk>=1&&wk<=8){if(!accWaku[wk])accWaku[wk]={total:0,w1:0,w2:0,w3:0,w5:0,sumRank:0};const s=accWaku[wk];s.total++;s.sumRank+=rank;if(rank===1)s.w1++;if(rank<=2)s.w2++;if(rank<=3)s.w3++;if(rank<=5)s.w5++}
-        // 人気
         const pop=ar.popularity||horse?.pop||horse?._resultPopularity||0;
         if(pop>=1&&pop<=18){if(!accPop[pop])accPop[pop]={total:0,w1:0,w2:0,w3:0,w5:0};const s=accPop[pop];s.total++;if(rank===1)s.w1++;if(rank<=2)s.w2++;if(rank<=3)s.w3++;if(rank<=5)s.w5++}
       });
     }else if(scored.length>0&&top3.length>=3){
-      // allResultsがないがtop3はある場合
       scored.forEach(horse=>{
         const rank=horse._resultRank||(top3.indexOf(horse.num)>=0?top3.indexOf(horse.num)+1:0);
         if(!rank)return;
@@ -3055,19 +3091,8 @@ function renderTrends(){
       });
     }
   });
-  // ソース2: HORSE_STORE（RACESで集計できなかった分を補完）
-  Object.entries(HORSE_STORE).forEach(([name,runs])=>{
-    runs.forEach(run=>{
-      const rank=run.rank;if(!rank)return;
-      const jk=run.jockey;
-      if(jk&&!accJockey[jk])accJockey[jk]={total:0,w1:0,w2:0,w3:0,w5:0};
-      // 重複を避けるため、HORSE_STOREの騎手データはRACESで未集計の場合のみ加算
-      // （簡易的に: accJockey[jk]が既に存在すればスキップはしない。二重計上のリスクはあるが、
-      //   bulk importはRACESにもallResultsを保存するようにしたので、新規取込分は重複しない）
-    });
-  });
 
-  const totalAccRaces=RACES.filter(r=>(r.result?.allResults?.length>0)||(r.result?.top3?.length>=3)).length;
+  const totalAccRaces=filteredRaces.length;
 
   // --- 騎手ごとの成績 ---
   const jkEntries=Object.entries(accJockey).filter(([,v])=>v.total>=3).sort((a,b)=>(b[1].w3/b[1].total)-(a[1].w3/a[1].total));
@@ -3096,28 +3121,6 @@ function renderTrends(){
       h+=`<tr style="background:${bg}"><td style="padding:4px 8px;font-weight:700">${name}</td><td style="padding:4px 8px;text-align:right">${s.total}</td><td style="padding:4px 8px;text-align:right;color:${s.w1/s.total>=.15?'var(--gld)':'var(--dim)'}">${Math.round(s.w1/s.total*100)}%</td><td style="padding:4px 8px;text-align:right">${Math.round(s.w2/s.total*100)}%</td><td style="padding:4px 8px;text-align:right;font-weight:700;color:${s.w3/s.total>=.3?'var(--grn)':'var(--dim)'}">${Math.round(s.w3/s.total*100)}%</td><td style="padding:4px 8px;text-align:right">${Math.round(s.w5/s.total*100)}%</td></tr>`;
     });
     h+=`</table></div>`;
-  }else{h+=`<div style="color:var(--dim);font-size:13px">データ不足</div>`}
-  h+=`</div>`;
-
-  // --- 枠番と実際の着順 ---
-  const wakuEntries=Object.entries(accWaku).sort((a,b)=>+a[0]- +b[0]);
-  h+=`<div class="pnl"><h3 class="r">🎰 枠番別 着順分布</h3>`;
-  h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px">枠番ごとの平均着順と好走率</div>`;
-  if(wakuEntries.length>0){
-    const WC2={1:'#eee8d8',2:'#1a1a1a',3:'#c41e3a',4:'#1a4488',5:'#d4a017',6:'#2d6a30',7:'#d4650b',8:'#c4507a'};
-    const WT2={1:'#1a1410',2:'#fff',3:'#fff',4:'#fff',5:'#1a1410',6:'#fff',7:'#fff',8:'#fff'};
-    h+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">`;
-    wakuEntries.forEach(([wk,s])=>{
-      const avg=(s.sumRank/s.total).toFixed(1);
-      const w3r=Math.round(s.w3/s.total*100);
-      h+=`<div style="background:var(--p2);border:2px solid ${WC2[wk]||'var(--bdr)'};border-radius:6px;padding:8px;text-align:center">
-        <div style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:4px;background:${WC2[wk]||'var(--p3)'};color:${WT2[wk]||'var(--ink)'};font-weight:900;font-size:14px;margin-bottom:4px">${wk}</div>
-        <div style="font-size:11px;color:var(--dim)">${s.total}走</div>
-        <div style="font-size:16px;font-weight:900">平均${avg}着</div>
-        <div style="font-size:12px;color:${w3r>=25?'var(--grn)':'var(--dim)'}">複勝率 ${w3r}%</div>
-      </div>`;
-    });
-    h+=`</div>`;
   }else{h+=`<div style="color:var(--dim);font-size:13px">データ不足</div>`}
   h+=`</div>`;
 
