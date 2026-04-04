@@ -726,35 +726,40 @@ const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.sco
 // ===== BET (v21: 単勝・馬連・ワイドの3択、レース質判定) =====
 function getHorseStatBonus(horse,raceInfo){
   let bonus=0;const reasons=[];
-  // ① 騎手の複勝率ボーナス
-  const jk=horse.jk;
+  // ① 騎手の複勝率ボーナス（フォールバック付き）
+  const jk=horse.jk||(()=>{for(const r of RACES){const ar=r.result?.allResults?.find(a=>a.num===horse.num&&r.scored?.find(h=>h.num===horse.num)?.name===horse.name);if(ar?.jockey)return ar.jockey}return null})();
   if(jk){
     let jkTotal=0,jkW3=0;
-    RACES.forEach(r=>{(r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);if((ar.jockey||h?.jk)===jk){jkTotal++;if(ar.rank<=3)jkW3++}})});
-    if(jkTotal>=5){const rate=jkW3/jkTotal;if(rate>=0.45){bonus+=15;reasons.push('騎手複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.35){bonus+=8;reasons.push('騎手複勝率'+Math.round(rate*100)+'%')}else if(rate<0.20){bonus-=8}}
+    RACES.forEach(r=>{
+      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const arJk=ar.jockey||h?.jk||'';if(arJk&&arJk===jk){jkTotal++;if(ar.rank<=3)jkW3++}});
+      if(!r.result?.allResults?.length){(r.scored||[]).forEach(h=>{if(h.jk&&h.jk===jk&&h._resultRank){jkTotal++;if(h._resultRank<=3)jkW3++}})}
+    });
+    if(jkTotal>=3){const rate=jkW3/jkTotal;if(rate>=0.40){bonus+=15;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate>=0.30){bonus+=8;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate<0.15){bonus-=8}}
   }
-  // ② 調教師の複勝率ボーナス
-  const tr=horse.trainer;
+  // ② 調教師の複勝率ボーナス（フォールバック付き）
+  const tr=horse.trainer||(()=>{for(const r of RACES){const ar=r.result?.allResults?.find(a=>a.name===horse.name);if(ar?.trainer)return ar.trainer}return null})();
   if(tr){
     let trTotal=0,trW3=0;
-    RACES.forEach(r=>{(r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);if((ar.trainer||h?.trainer)===tr){trTotal++;if(ar.rank<=3)trW3++}})});
-    if(trTotal>=5){const rate=trW3/trTotal;if(rate>=0.50){bonus+=12;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.40){bonus+=6;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%')}else if(rate<0.20){bonus-=6}}
+    RACES.forEach(r=>{
+      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const arTr=ar.trainer||h?.trainer||'';if(arTr&&arTr===tr){trTotal++;if(ar.rank<=3)trW3++}});
+      if(!r.result?.allResults?.length){(r.scored||[]).forEach(h=>{if(h.trainer&&h.trainer===tr&&h._resultRank){trTotal++;if(h._resultRank<=3)trW3++}})}
+    });
+    if(trTotal>=3){const rate=trW3/trTotal;if(rate>=0.45){bonus+=12;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trTotal+'走)')}else if(rate>=0.35){bonus+=6;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trTotal+'走)')}else if(rate<0.15){bonus-=6}}
   }
   // ③ 条件適性ボーナス（馬場・距離・競馬場）
   const surf=raceInfo?.type||'';const dist=raceInfo?.dist||0;const venue=(raceInfo?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   if(horse.name&&HORSE_DB[horse.name]){
     const hist=HORSE_DB[horse.name];
-    const condMatches=hist.filter(x=>x.surface===surf&&x.dist&&Math.abs(x.dist-dist)<=200);
-    if(condMatches.length>=2){const w3=condMatches.filter(x=>x.rank<=3).length;const rate=w3/condMatches.length;if(rate>=0.5){bonus+=12;reasons.push('条件複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.33){bonus+=6}}
-    const venueMatches=hist.filter(x=>x.venue===venue);
-    if(venueMatches.length>=2){const w3v=venueMatches.filter(x=>x.rank<=3).length;if(w3v/venueMatches.length>=0.5){bonus+=8;reasons.push(venue+'複勝率高')}}
+    const cond=hist.filter(x=>x.surface===surf&&x.dist&&Math.abs(x.dist-dist)<=200);
+    if(cond.length>=2){const w3=cond.filter(x=>x.rank<=3).length;const rate=w3/cond.length;if(rate>=0.5){bonus+=12;reasons.push('条件複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.33){bonus+=6}}
+    if(venue){const vm=hist.filter(x=>x.venue===venue);if(vm.length>=2&&vm.filter(x=>x.rank<=3).length/vm.length>=0.5){bonus+=8;reasons.push(venue+'複勝率高')}}
   }
   // ④ 人気別期待値ボーナス
   const pop=horse.pop;
   if(pop>=1&&pop<=18){
-    let popTotal=0,popW3=0;
-    RACES.forEach(r=>{(r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const hPop=h?.pop||ar.popularity;if(hPop===pop){popTotal++;if(ar.rank<=3)popW3++}})});
-    if(popTotal>=10){const expected=popW3/popTotal;const thresholds={1:0.55,2:0.45,3:0.38,4:0.32,5:0.28,6:0.24,7:0.20,8:0.18,9:0.16,10:0.14};const threshold=thresholds[pop]||0.12;if(expected>threshold+0.08){bonus+=10;reasons.push(pop+'番人気の複勝率'+Math.round(expected*100)+'%')}else if(expected<threshold-0.08){bonus-=8}}
+    let pTotal=0,pW3=0;
+    RACES.forEach(r=>{(r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const hPop=h?.pop||ar.popularity;if(hPop===pop){pTotal++;if(ar.rank<=3)pW3++}})});
+    if(pTotal>=5){const exp=pW3/pTotal;const thr={1:0.55,2:0.45,3:0.38,4:0.32,5:0.28,6:0.24,7:0.20,8:0.18,9:0.16,10:0.14}[pop]||0.12;if(exp>thr+0.06){bonus+=10;reasons.push(pop+'番人気期待値高('+Math.round(exp*100)+'%)')}else if(exp<thr-0.06){bonus-=8}}
   }
   return{bonus,reasons};
 }
@@ -839,6 +844,7 @@ function genBet(scored,raceInfo,marketOdds){
     const sb=getHorseStatBonus(h,raceInfo);
     h.statBonus=sb.bonus;h.statReasons=sb.reasons;
     h.totalScore=h.ns+Math.round(sb.bonus*0.5);
+    if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'bonus:',sb.bonus,'reasons:',sb.reasons);
   });
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
