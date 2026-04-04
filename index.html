@@ -837,10 +837,10 @@ function genBet(scored,raceInfo,marketOdds){
   // レース質判定：-40以下で見送り
   const poorRace=raceQuality.score<=-40;
 
-  // オッズ3倍未満の馬を除外（オッズデータがある場合のみ）
-  const excluded=hasOddsData?scored.filter(h=>h.odds&&h.odds<3.0):[];
-  const eligible=hasOddsData?scored.filter(h=>!h.odds||h.odds>=3.0):scored;
-  const useEligible=eligible.length>=2?eligible:scored.filter(h=>h!==favHorse);
+  // オッズデータがある場合のみ除外、なければ全馬対象
+  const excluded=[];
+  const eligible=scored;
+  const useEligible=eligible;
 
   function stableScore(h){
     let s=0;
@@ -888,9 +888,9 @@ function genBet(scored,raceInfo,marketOdds){
   const STRONG_F=['前走','着差','上がり','トレンド','距離','コース','馬場','競馬場'];
   function countG(h){return STRONG_F.filter(k=>h.f?.[k]?.c==='g').length}
   const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
-  // 軸馬: ns基準（80以上。人気データがあれば1〜3番手を優先）
-  let A=scored.find(h=>h.ns>=80&&h.pop&&h.pop<=3)||scored.find(h=>h.ns>=80&&h.pop&&h.pop<=5)||scored.find(h=>h.ns>=80)||null;
-  let B=scored.filter(h=>h!==A).find(h=>h.ns>=50)||null;
+  // 軸馬: ns基準のみ（人気・オッズに依存しない）
+  let A=scored.find(h=>h.ns>=80)||scored.find(h=>h.ns>=50)||null;
+  let B=scored.filter(h=>h!==A).find(h=>h.ns>=50)||scored.filter(h=>h!==A)[0]||null;
   let C=scored.filter(h=>h!==A&&h!==B).find(h=>h.ns>=50)||null;
 
   // ===== レース質判定 =====
@@ -898,12 +898,9 @@ function genBet(scored,raceInfo,marketOdds){
   const nsDiff=scored.length>=2?(scored[0].ns-scored[1].ns):0;
   const top3=scored.slice(0,3);
   const top3diff=top3.length>=3?(top3[0].ns-top3[2].ns):99;
-  const hasPop=top3.some(h=>h.pop&&h.pop>0);
-  const allPop4Plus=hasPop&&top3.every(h=>h.pop&&h.pop>=4);
-
-  // 3パターン判定（人気データがない場合はスコア差のみで判定）
-  const isAxisClear=A&&A.ns>=80&&nsDiff>=8;
-  const isMixedRace=top3diff<=8;
+  // 3パターン判定（ns のみで判定、人気・オッズに依存しない）
+  const isAxisClear=A&&A.ns>=80&&nsDiff>=10;
+  const isMixedRace=scored.length>=3&&top3diff<=8;
   const isStandard=!isAxisClear&&!isMixedRace&&A&&A.ns>=50;
 
   // 見送り判定
@@ -921,7 +918,7 @@ function genBet(scored,raceInfo,marketOdds){
   else if(axisG>=3){confidence='★★ 中';confLevel=2}
   else{confidence='★ 低';confLevel=1}
 
-  const skipReason=budgetOver?'本日の予算上限に到達':topNs<70?'最高スコア不足('+topNs+')':(!A||!B)?'候補馬不足':'条件を満たす買い目なし';
+  const skipReason=budgetOver?'本日の予算上限に到達':topNs<50?'最高スコア不足('+topNs+')':(!A||!B)?'候補馬不足':'条件を満たす買い目なし';
 
   if(!A||!B){
     return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
@@ -1008,20 +1005,6 @@ function genBet(scored,raceInfo,marketOdds){
   if(!skipRecommended&&!hasMarket){
     // オッズ未入力時の注記
     tickets.forEach(tk=>{if(tk.actualOdds==null){tk.grade='-';tk.gradeLabel='※オッズ未入力'}});
-    // 単勝オッズのみで追加判定
-    const axisOdds=A?.odds||0;
-    if(axisOdds<3&&!isMixedRace){skipRecommended=true;tickets=[];}
-    else if(axisOdds<5&&raceType==='標準'){
-      // 3-4.9倍→ワイドに切り替え
-      raceType='標準(ワイド)';
-      tickets=[];
-      [B,C].filter(Boolean).forEach(p=>{
-        tickets.push({type:'ワイド',desc:A.num+'─'+p.num,amount:100,horses:[A,p],
-          actualOdds:null,grade:'-',gradeLabel:'※オッズ未入力',
-          reason:A.num+'番─'+p.num+'番が3着以内で的中'});
-      });
-      if(tickets.length===0)skipRecommended=true;
-    }
   }
 
   if(skipRecommended)tickets=[];
