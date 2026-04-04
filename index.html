@@ -51,6 +51,9 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 /* Tags */
 .tag{display:inline-block;padding:3px 7px;font-size:11px;font-weight:700;border-radius:3px;margin:2px 1px}
 .tag-g{background:rgba(45,106,48,.12);color:var(--grn)}.tag-n{background:rgba(184,134,11,.12);color:var(--gld)}.tag-b{background:rgba(196,30,58,.12);color:var(--red)}
+/* Jockey aptitude popup */
+.jk-apt-trigger{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+#jkAptPopup{position:fixed;background:var(--p);border:1px solid var(--bdr);border-radius:8px;padding:12px 16px;font-size:12px;z-index:200;min-width:220px;max-width:320px;display:none;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 /* Cards - larger touch targets */
 .card{background:var(--p);border:2px solid var(--bdt);padding:14px;margin-bottom:8px;cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-radius:6px;min-height:52px;touch-action:manipulation;transition:background .1s}
 .card:active{background:var(--p3)}
@@ -587,6 +590,85 @@ document.getElementById('dateStr').textContent=new Date().toLocaleDateString('ja
 // ===== WAKU =====
 const WC={1:'#eee8d8',2:'#1a1a1a',3:'#c41e3a',4:'#1a4488',5:'#d4a017',6:'#2d6a30',7:'#d4650b',8:'#c4507a'};
 const WT={1:'#1a1a1a',2:'#fff',3:'#fff',4:'#fff',5:'#1a1a1a',6:'#fff',7:'#fff',8:'#fff'};
+
+// ===== 騎手適性データ（v2.9: 127騎手・11,446出走データ） =====
+let JOCKEY_APTITUDE={};
+fetch('data/jockey_aptitude.json').then(r=>r.ok?r.json():null).then(d=>{if(d)JOCKEY_APTITUDE=d}).catch(()=>{});
+
+// ===== バッジ生成ユーティリティ =====
+function getBlinkerBadge(horse){
+  if(!horse.bl)return '';
+  return '<span style="background:#FAECE7;color:#993C1D;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:4px;font-weight:700">B 消</span>';
+}
+function getSameCondBadge(horse,raceInfo){
+  if(!horse.prev||!horse.prev[0])return '';
+  const l=horse.prev[0];
+  const venue=(raceInfo?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+  let match=0;
+  if(l.venue&&venue&&l.venue===venue)match++;
+  if(l.dist&&raceInfo?.dist&&l.dist===raceInfo.dist)match++;
+  const surf=raceInfo?.type||'';const prevSurf=l.surface==='ダ'?'ダート':l.surface==='芝'?'芝':'';
+  if(surf&&prevSurf&&surf===prevSurf)match++;
+  if(match>=3)return '<span style="background:#E1F5EE;color:#0F6E56;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:4px;font-weight:700">同条件</span>';
+  if(match>=2)return '<span style="background:#E6F1FB;color:#185FA5;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:4px;font-weight:700">類似条件</span>';
+  return '';
+}
+function getJockeyAptPopup(jkName,raceInfo){
+  const jkNorm=(jkName||'').replace(/[\s　]+/g,'');
+  // JOCKEY_APTITUDEのキーはスペース含む場合があるため両方で検索
+  const apt=JOCKEY_APTITUDE[jkName]||JOCKEY_APTITUDE[jkNorm];
+  if(!apt)return null;
+  const venue=(raceInfo?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+  const surf=raceInfo?.type||'';
+  const dist=raceInfo?.dist||0;
+  const distCat=dist<=1400?'短距離':dist<=1800?'マイル':dist<=2200?'中距離':'長距離';
+  // 今回条件に該当するグレードを取得
+  const vGrade=apt.venue?.[venue];
+  const cGrade=apt.course?.[surf];
+  const dGrade=apt.dist?.[distCat];
+  return{apt,venue:vGrade,course:cGrade,dist:dGrade,venueName:venue,surfName:surf,distName:distCat};
+}
+function renderJockeyAptBadge(jkName,raceInfo){
+  const info=getJockeyAptPopup(jkName,raceInfo);
+  if(!info)return '';
+  // 今回条件に当てはまるグレードだけをバッジ表示
+  const badges=[];
+  const gradeStyle=g=>{
+    if(g==='◎')return 'background:#E1F5EE;color:#0F6E56';
+    if(g==='○')return 'background:#E6F1FB;color:#185FA5';
+    if(g==='▽')return 'background:#FAEEDA;color:#854F0B';
+    if(g==='△')return 'background:#FAECE7;color:#993C1D';
+    return '';
+  };
+  if(info.venue)badges.push(`<span style="${gradeStyle(info.venue.grade)};font-size:10px;padding:2px 5px;border-radius:3px">${info.venueName}${info.venue.grade}</span>`);
+  if(info.course)badges.push(`<span style="${gradeStyle(info.course.grade)};font-size:10px;padding:2px 5px;border-radius:3px">${info.surfName}${info.course.grade}</span>`);
+  if(info.dist)badges.push(`<span style="${gradeStyle(info.dist.grade)};font-size:10px;padding:2px 5px;border-radius:3px">${info.distName}${info.dist.grade}</span>`);
+  if(badges.length===0)return '';
+  return '<span style="margin-left:4px;display:inline-flex;gap:2px;flex-wrap:wrap">'+badges.join('')+'</span>';
+}
+function renderJockeyPopupHTML(jkName){
+  const jkNorm=(jkName||'').replace(/[\s　]+/g,'');
+  const apt=JOCKEY_APTITUDE[jkName]||JOCKEY_APTITUDE[jkNorm];
+  if(!apt)return `<div style="font-size:12px;color:var(--dim);padding:8px">適性データなし</div>`;
+  const gradeStyle=g=>{
+    if(g==='◎')return 'background:#E1F5EE;color:#0F6E56';
+    if(g==='○')return 'background:#E6F1FB;color:#185FA5';
+    if(g==='▽')return 'background:#FAEEDA;color:#854F0B';
+    if(g==='△')return 'background:#FAECE7;color:#993C1D';
+    return '';
+  };
+  const renderCat=(label,data)=>{
+    if(!data||Object.keys(data).length===0)return '';
+    const items=Object.entries(data).map(([k,v])=>`<span style="${gradeStyle(v.grade)};font-size:11px;padding:2px 6px;border-radius:3px;margin-right:4px">${k}${v.grade}${v.pct?Math.round(v.pct)+'%':''}</span>`).join('');
+    return `<div style="margin-bottom:6px"><span style="color:var(--dim);font-size:11px;margin-right:6px">${label}</span>${items}</div>`;
+  };
+  let html=`<div style="font-weight:700;font-size:13px;margin-bottom:8px;border-bottom:1px solid var(--bdr);padding-bottom:4px">${jkName} の適性</div>`;
+  html+=renderCat('競馬場',apt.venue);
+  html+=renderCat('コース',apt.course);
+  html+=renderCat('距離',apt.dist);
+  html+=`<div style="font-size:10px;color:var(--dim);margin-top:6px">n>=10のカテゴリのみ / ベースライン21.2%</div>`;
+  return html;
+}
 
 // ===== 設定 =====
 const CUTOFF_DATE='2026/3/15';
@@ -3182,7 +3264,7 @@ function renderDetail(id){
       else watchPoint='4コーナーで外に出せているかを確認';
 
       h+=`<div style="background:var(--p2);border:2px solid var(--bdr);border-radius:6px;padding:14px;margin-bottom:12px">`;
-      h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);letter-spacing:2px;margin-bottom:6px">◎ ${ax.name} の理想の位置取り</div>`;
+      h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);letter-spacing:2px;margin-bottom:6px">◎ ${ax.name}${getBlinkerBadge(ax)}${getSameCondBadge(ax,r.info)} の理想の位置取り</div>`;
       h+=`<div style="font-size:14px;font-weight:900;color:var(--ink);line-height:1.6;margin-bottom:8px">${idealPos}</div>`;
       h+=`<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px">`;
       h+=`<span style="color:var(--gld);font-weight:700">脚質: ${legLabel}${avgPos!=null?' (平均'+avgPos.toFixed(1)+'番手)':''}</span>`;
@@ -3201,6 +3283,16 @@ function renderDetail(id){
         <span style="min-width:70px;font-weight:700;color:var(--dim)">スタート</span>
         <span>◎は<b>${gateNum}番ゲート</b>（${gatePos}）— ${gateBias}</span>
       </div>`;
+
+      // 騎手適性
+      if(ax.jk){
+        const aptBadges=renderJockeyAptBadge(ax.jk,r.info);
+        const jkEsc=ax.jk.replace(/'/g,"\\'");
+        h+=`<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px dashed var(--bdr);font-size:13px;align-items:center">
+          <span style="min-width:70px;font-weight:700;color:var(--dim)">騎手</span>
+          <span><b class="jk-apt-trigger" onclick="showJkAptPopup(event,'${jkEsc}')">${ax.jk}</b>${aptBadges||' <span style=\"font-size:11px;color:var(--dim)\">適性データなし</span>'}</span>
+        </div>`;
+      }
 
       // 末脚タイプ
       const f3data=ax.f?.['上がり'];
@@ -3366,10 +3458,10 @@ function renderDetail(id){
         h+=`<tr style="background:${bg}">
           <td style="padding:3px 6px;font-weight:900;color:${idx<3?'var(--gld)':'var(--dim)'}">${ar.rank}</td>
           <td style="padding:3px 6px;font-weight:700">${ar.num}</td>
-          <td style="padding:3px 6px;font-weight:${isBet?'900':'500'};color:${isBet?'var(--grn)':'var(--ink)'}">${ar.name||''}${isBet?' ★':''}</td>
+          <td style="padding:3px 6px;font-weight:${isBet?'900':'500'};color:${isBet?'var(--grn)':'var(--ink)'}">${ar.name||''}${isBet?' ★':''}${(()=>{const sc=s?.find(x=>x.num===ar.num);return sc?getBlinkerBadge(sc)+getSameCondBadge(sc,r.info):'';})()}</td>
           <td style="padding:3px 6px;color:var(--dim)">${ar.sexAge||''}</td>
           <td style="padding:3px 6px;text-align:right">${ar.weight||''}</td>
-          <td style="padding:3px 6px">${ar.jockey||''}</td>
+          <td style="padding:3px 6px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(ar.jockey||'').replace(/'/g,"\\'")}')">${ar.jockey||''}</span></td>
           <td style="padding:3px 6px;text-align:right;font-weight:700">${ar.time||''}</td>
           <td style="padding:3px 6px;color:var(--dim)">${ar.margin||''}</td>
           <td style="padding:3px 6px;color:var(--dim)">${ar.positions?ar.positions.join('-'):''}</td>
@@ -4314,6 +4406,22 @@ async function doGhLoad(){
     }).catch(e=>console.warn('SW登録失敗:',e));
   }
 })();
+// ===== 騎手適性ポップアップ =====
+function showJkAptPopup(e,jkName){
+  e.stopPropagation();
+  let popup=document.getElementById('jkAptPopup');
+  if(!popup){popup=document.createElement('div');popup.id='jkAptPopup';document.body.appendChild(popup)}
+  popup.innerHTML=renderJockeyPopupHTML(jkName);
+  popup.style.display='block';
+  // モバイル対応：画面内に収める
+  const rect=e.target.getBoundingClientRect();
+  let top=rect.bottom+4;let left=rect.left;
+  if(left+320>window.innerWidth)left=window.innerWidth-330;
+  if(left<10)left=10;
+  if(top+200>window.innerHeight)top=rect.top-210;
+  popup.style.top=top+'px';popup.style.left=left+'px';
+}
+document.addEventListener('click',()=>{const p=document.getElementById('jkAptPopup');if(p)p.style.display='none'});
 </script>
 </body>
 </html>
