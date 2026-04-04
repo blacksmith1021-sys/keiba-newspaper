@@ -2638,6 +2638,10 @@ function renderDetail(id){
   try{
   const r=RACES.find(x=>x.id===id);if(!r)return;
   const s=r.scored;let b=r.bet;const hasR=r.result?.top3?.length>=3;
+  // bet が未定義の場合は genBet を再実行して修復
+  if(!b&&s?.length>0){
+    try{b=genBet(s,r.info);r.bet=b;saveR(RACES)}catch(e){console.warn('bet再生成失敗:',e.message)}
+  }
   const hi=hasR?getHitInfo(r):{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0};
   const isHit=hi.wideHit;
   // 旧データ互換：bets配列→best単体に変換
