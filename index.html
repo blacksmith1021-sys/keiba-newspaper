@@ -3661,6 +3661,7 @@ async function doGhLoad(){
   RACES.forEach(r=>{
     if(!r.scored||r.scored.length===0||r.id?.startsWith('bulk_')||r.id?.startsWith('csv_'))return;
     if(r._scoreVer===SCORE_VER)return; // 既に最新バージョンで計算済み
+    if(r.result?.top3?.length>=3)return; // 結果入力済みレースは再スコアリングしない（データリーケージ防止）
     try{
       const race={horses:r.scored.map(h=>({
         num:h.num,name:h.name,waku:h.waku,odds:h.odds,pop:h.pop,
