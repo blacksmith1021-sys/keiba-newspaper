@@ -2137,6 +2137,7 @@ function parseOddsText(text,mode){
   return result;
 }
 
+let _dupOverwrite=false;
 function doAnalyze(){
   try{
   const t=document.getElementById('raceIn').value.trim();
@@ -2151,17 +2152,47 @@ function doAnalyze(){
     </div>`;errDiv.classList.remove('hidden')}
     return;
   }
+  // === 重複チェック ===
+  const pVenue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+  const pDate=parsed.info.date||'';
+  const pNum=parsed.info.raceNum||'';
+  const dupKey=pDate+'_'+pVenue+'_'+pNum;
+  const existingDup=RACES.find(r=>{
+    const v=(r.info?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+    return (r.info?.date||'')==pDate&&v==pVenue&&(r.info?.raceNum||'')==pNum;
+  });
+  if(existingDup&&!_dupOverwrite){
+    const errDiv=document.getElementById('analyzeError');
+    if(errDiv){
+      errDiv.innerHTML=`<div style="padding:12px 14px;border-left:4px solid var(--red);background:rgba(196,30,58,.08);font-size:13px;color:var(--ink);border-radius:4px;margin-top:8px;position:relative">
+        <button onclick="this.parentElement.parentElement.classList.add('hidden')" style="position:absolute;top:6px;right:8px;background:none;border:none;font-size:16px;cursor:pointer;color:var(--dim)">×</button>
+        <div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠️ このレースはすでに登録されています</div>
+        <div style="margin-bottom:8px">${pDate} ${pVenue} ${pNum}R</div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:10px">再分析する場合は「上書きして再分析」を押してください。</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-r" onclick="_dupOverwrite=true;doAnalyze();_dupOverwrite=false;" style="padding:8px 16px;font-size:13px">上書きして再分析</button>
+          <button class="btn-s" onclick="document.getElementById('analyzeError').classList.add('hidden')" style="padding:8px 16px;font-size:13px">キャンセル</button>
+        </div>
+      </div>`;
+      errDiv.classList.remove('hidden');
+    }
+    return;
+  }
+  // 上書き時: 既存データを削除
+  if(existingDup&&_dupOverwrite){
+    RACES=RACES.filter(r=>r.id!==existingDup.id);
+  }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
   const bet=genBet(scored,parsed.info);
   const id=Date.now().toString();
-  const venue=(parsed.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
-  const label=(parsed.info.date||'?')+' '+venue+' '+(parsed.info.raceNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
-  const sk=parsed.info.date?parsed.info.date.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
-  const sortKey=sk+String(parsed.info.raceNum||0).padStart(2,'0');
+  const venue=pVenue;
+  const label=(pDate||'?')+' '+venue+' '+(pNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
+  const sk=pDate?pDate.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
+  const sortKey=sk+String(pNum||0).padStart(2,'0');
   const race={id,label,sortKey,info:parsed.info,scored,bet,result:null,_scoreVer:'v5.0.0'};
   RACES.unshift(race);saveR(RACES);
-  autoSaveAll(); // 分析完了後に自動保存
+  autoSaveAll();
   document.getElementById('raceIn').value='';
   CUR=id;showView('detail');
   }catch(e){alert('分析エラー: '+e.message+'\n'+e.stack)}
