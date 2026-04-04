@@ -2929,41 +2929,44 @@ function importAnalysisCSV(text,fileName){
   const hdr=parseCSVLine(lines[0]);
   const idx={};
   hdr.forEach((h,i)=>idx[h.trim()]=i);
-  // 必須列チェック
-  const need=['日付','競馬場','レース','馬番','馬名','スコア(ns)'];
+
+  // 必須列: 日付・競馬場・馬名のみ。レース・馬番・スコアはオプション
+  const need=['日付','競馬場','馬名'];
   const missing=need.filter(k=>idx[k]===undefined);
-  if(missing.length>0){alert('必須列が見つかりません: '+missing.join(', ')+'\n\n検証データCSV形式のファイルを選択してください。');return}
+  if(missing.length>0){alert('必須列が見つかりません: '+missing.join(', ')+'\n\nCSVには最低限「日付」「競馬場」「馬名」列が必要です。');return}
 
   const g=k=>idx[k]!==undefined;
   // レースごとにグルーピング
   const raceMap=new Map();
   for(let i=1;i<lines.length;i++){
     const c=parseCSVLine(lines[i]);
-    if(c.length<6)continue;
+    if(c.length<3)continue;
     const date=c[idx['日付']]||'';
     const venue=c[idx['競馬場']]||'';
-    const raceStr=c[idx['レース']]||'';
-    const raceKey=date+'_'+venue+'_'+raceStr;
+    const raceStr=g('レース')?(c[idx['レース']]||''):(g('レース番号')?(c[idx['レース番号']]||''):'');
+    const dist=g('距離')?parseInt(c[idx['距離']])||0:0;
+    // レースキー: レース番号があればそれを使い、なければ日付+競馬場+距離
+    const raceKey=raceStr?date+'_'+venue+'_'+raceStr:date+'_'+venue+'_'+dist;
     if(!raceMap.has(raceKey))raceMap.set(raceKey,{date,venue,raceStr,rows:[]});
     raceMap.get(raceKey).rows.push(c);
   }
 
-  let imported=0,skipped=0;
+  let imported=0,skipped=0,horseAccumulated=0;
   const factorKeys=['前走','上がり','距離','血統','騎手','安定','トレンド','着差','間隔','蓄積','回り','馬場'];
 
   for(const [raceKey,rd] of raceMap){
     const {date,venue,raceStr,rows}=rd;
-    const raceNum=raceStr.replace(/R$/i,'');
-    const distStr=rows[0][idx['距離']]||'';
+    const raceNum=(raceStr||'').replace(/R$/i,'');
+    const distStr=g('距離')?rows[0][idx['距離']]:'';
     const dist=parseInt(distStr)||0;
     const surf=g('コース')?rows[0][idx['コース']]:'';
-    const cond=g('馬場')?rows[0][idx['馬場']]:'';
+    const cond=g('馬場')?rows[0][idx['馬場']]:(g('馬場状態')?rows[0][idx['馬場状態']]:'');
     const cls=g('クラス')?rows[0][idx['クラス']]:'';
     const headCount=g('頭数')?parseInt(rows[0][idx['頭数']])||rows.length:rows.length;
 
-    // 重複チェック: 同じ日付・競馬場・レース番号があればスキップ
-    const sortKey=date.replace(/\//g,'')+('0'+raceNum).slice(-2);
-    const dupLabel=date+' '+venue+' '+raceNum+'R';
+    // 重複チェック
+    const sortKey=date.replace(/\//g,'')+(raceNum?('0'+raceNum).slice(-2):'00');
+    const dupLabel=date+' '+venue+' '+(raceNum||'?')+'R';
     const exists=RACES.some(r=>{
       if(r.label===dupLabel)return true;
       if(r.sortKey===sortKey&&r.info?.date===date)return true;
@@ -2971,126 +2974,156 @@ function importAnalysisCSV(text,fileName){
     });
     if(exists){skipped++;continue}
 
-    // 馬データ構築
-    const horses=[];
+    // コース種別推定
+    let type='';
+    if(surf){
+      if(surf.includes('ダート')||surf==='ダ')type='ダート';
+      else if(surf.includes('芝'))type='芝';
+    }
+
+    // 馬データ構築（scored 配列 + HORSE_STORE蓄積）
+    const scoredHorses=[];
     let hasResult=false;
-    rows.forEach(c=>{
-      const num=parseInt(c[idx['馬番']])||0;
-      const name=c[idx['馬名']]||'';
-      const odds=parseFloat(c[idx['単勝オッズ']])||0;
+    rows.forEach((c,rowIdx)=>{
+      const num=g('馬番')?parseInt(c[idx['馬番']])||rowIdx+1:rowIdx+1;
+      const name=(c[idx['馬名']]||'').trim();
+      if(!name)return;
+      const odds=g('単勝オッズ')?parseFloat(c[idx['単勝オッズ']])||0:0;
       const pop=g('人気')?parseInt(c[idx['人気']])||0:0;
-      const ns=parseFloat(c[idx['スコア(ns)']])||0;
+      const ns=g('スコア(ns)')?parseFloat(c[idx['スコア(ns)']])||0:(g('スコア合計')?parseFloat(c[idx['スコア合計']])||0:0);
       const actualRank=g('実際着順')?parseInt(c[idx['実際着順']])||null:null;
       const inTop3=g('3着以内')?(c[idx['3着以内']]==='1'):actualRank!=null&&actualRank<=3;
       if(actualRank)hasResult=true;
 
+      const waku=g('枠番')?parseInt(c[idx['枠番']])||0:0;
+      const jk=g('騎手名')?(c[idx['騎手名']]||''):'';
+      const trainer='';
+      const wt=g('馬体重')?parseInt(c[idx['馬体重']])||0:0;
+      const wc=g('馬体重増減')?parseInt(c[idx['馬体重増減']])||0:0;
+      const sexAge=g('性齢')?(c[idx['性齢']]||''):'';
+      const sexM=sexAge.match(/(牡|牝|せん)(\d)/);
+      const sex=sexM?sexM[1]:'';
+      const age=sexM?+sexM[2]:0;
+      const imp=g('斤量')?parseFloat(c[idx['斤量']])||0:0;
+      const bl=g('ブリンカー')?(c[idx['ブリンカー']]||'').trim():'';
+      const sire=g('父')?(c[idx['父']]||''):'';
+      const last3f=g('実際上がりタイム')?parseFloat(c[idx['実際上がりタイム']])||0:0;
+      const posStr=g('実際通過順位')?(c[idx['実際通過順位']]||''):'';
+      const positions=posStr?posStr.split('-').map(Number).filter(n=>!isNaN(n)):[];
+
+      // --- 前走データ → prev 配列を構築 ---
+      const prev=[];
+      const prevDate=g('前走日付')?(c[idx['前走日付']]||'').trim():'';
+      if(prevDate){
+        const prevVenue=g('前走競馬場')?(c[idx['前走競馬場']]||''):'';
+        const prevDist=g('前走距離')?parseInt(c[idx['前走距離']])||0:0;
+        const prevCourse=g('前走コース')?(c[idx['前走コース']]||''):'';
+        const prevCond=g('前走馬場')?(c[idx['前走馬場']]||''):'';
+        const prevRank=g('前走着順')?parseInt(c[idx['前走着順']])||0:0;
+        const prevRun=g('前走頭数')?parseInt(c[idx['前走頭数']])||0:0;
+        const prevGap=g('前走着差')?parseFloat(c[idx['前走着差']]):null;
+        const prevF3=g('前走上がりタイム')?parseFloat(c[idx['前走上がりタイム']])||0:0;
+        const prevCls=g('前走レース格')?(c[idx['前走レース格']]||''):'';
+        const prevSurf=prevCourse.includes('ダート')||prevCourse==='ダ'?'ダ':prevCourse.includes('芝')?'芝':prevCourse;
+        const dp=prevDate.split('/');
+        const dateKey=dp.length>=3?(+dp[0]*10000+ +dp[1]*100+ +dp[2]):0;
+        prev.push({
+          fin:prevRank,run:prevRun,dist:prevDist,surface:prevSurf,
+          cond:prevCond,venue:prevVenue,cls:prevCls,
+          gap:prevGap!=null&&!isNaN(prevGap)?prevGap:null,
+          f3:prevF3,dateKey,pos:null
+        });
+      }
+
       // ファクター復元
-      const factors={};
+      const f={};
       factorKeys.forEach(fk=>{
         const col='F_'+fk;
         if(!g(col))return;
-        const val=c[idx[col]]||'';
-        if(!val)return;
-        // 昇降級は特殊列
+        const val=c[idx[col]]||'';if(!val)return;
         if(fk==='昇降級')return;
-        const cClass=val.startsWith('g')?'g':val.startsWith('b')?'b':'n';
-        factors[fk]={v:0,c:cClass};
+        f[fk]={v:0,c:val.startsWith('g')?'g':val.startsWith('b')?'b':'n'};
       });
-      // 昇降級
-      if(g('F_昇降級')){
-        const lv=c[idx['F_昇降級']]||'';
-        if(lv.includes('昇級'))factors['昇級']={v:-5,c:'b'};
-        else if(lv.includes('降級'))factors['降級']={v:5,c:'g'};
+
+      scoredHorses.push({
+        num,name,waku,odds,pop,ns,score:ns,
+        jk,trainer,wt,wc,sex,age,imp,bl:bl?true:false,sire,
+        prev,f,
+        _resultRank:actualRank,
+        _resultLast3f:last3f,
+        _resultPositions:positions.length>0?positions:null,
+        _resultOdds:odds,
+        _resultPopularity:pop
+      });
+
+      // --- HORSE_STORE に蓄積 ---
+      if(actualRank&&name){
+        if(!HORSE_STORE[name])HORSE_STORE[name]=[];
+        const dup=HORSE_STORE[name].some(x=>x.date===date&&x.rank===actualRank&&x.dist===dist);
+        if(!dup){
+          HORSE_STORE[name].push({
+            date,venue,dist,surface:type||surf,cond,
+            rank:actualRank,runners:headCount,
+            time:'',last3f,positions:positions.length>0?positions:null,
+            jockey:jk,bodyWeight:wt?String(wt):''
+          });
+          horseAccumulated++;
+        }
       }
-
-      // 役割
-      const role=g('役割(A/B/C)')?c[idx['役割(A/B/C)']]:'';
-      const isA=role.startsWith('A');
-      const isB=role.startsWith('B');
-      const isC=role.startsWith('C');
-
-      horses.push({num,name,odds,pop,ns,score:ns,factors,actualRank,inTop3,isA,isB,isC});
     });
+
+    // scored をスコア降順ソート
+    scoredHorses.sort((a,b)=>(b.ns||0)-(a.ns||0));
+
+    // top3復元
+    const top3=scoredHorses.filter(h=>h._resultRank&&h._resultRank<=3)
+      .sort((a,b)=>a._resultRank-b._resultRank).map(h=>String(h.num));
 
     // 信頼度・レース質
     const confidence=g('信頼度')?rows[0][idx['信頼度']]:'';
     const raceQualityScore=g('レース質スコア')?parseInt(rows[0][idx['レース質スコア']])||0:0;
     const skipStr=g('見送り')?rows[0][idx['見送り']]:'';
     const skipRecommended=skipStr==='見送り';
-
-    // 投資・回収（レース単位: 全行同値なので先頭行から取得）
     const inv=g('投資額')?parseInt(rows[0][idx['投資額']])||0:0;
     const ret=g('回収額')?parseInt(rows[0][idx['回収額']])||0:0;
-
-    // top3復元
-    const top3=horses.filter(h=>h.inTop3).sort((a,b)=>(a.actualRank||99)-(b.actualRank||99)).map(h=>String(h.num));
-
-    // コース種別推定
-    let type='';
-    if(surf){
-      if(surf.includes('ダート'))type='ダート';
-      else if(surf.includes('芝'))type='芝';
-    }
 
     const raceId='csv_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)+'_'+imported;
     const raceObj={
       id:raceId,
-      label:date+' '+venue+' '+raceNum+'R',
+      label:date+' '+venue+' '+(raceNum||'?')+'R',
       sortKey,
-      info:{
-        date,
-        course:venue,
-        raceNum,
-        dist,
-        surf:surf||'',
-        type:type||'',
-        cond:cond||'',
-        cls:cls||''
-      },
-      scored:[],
-      bet:{
-        best:null,
-        tickets:[],
-        totalInv:inv,
-        confidence,
-        skipRecommended,
-        raceQuality:{score:raceQualityScore,reasons:[]}
-      },
+      info:{date,course:venue,raceNum:raceNum||'',dist,surf:surf||'',type:type||'',cond:cond||'',cls:cls||''},
+      scored:scoredHorses,
+      bet:{best:null,tickets:[],totalInv:inv,confidence,skipRecommended,
+        raceQuality:{score:raceQualityScore,reasons:[]}},
       result:{
         top3:top3.length>=3?top3:[],
         payout:ret,
         reasons:['CSV取込データ'],
-        analysisSnapshot:{
-          raceInfo:{
-            date,venue,dist,surface:type,cond,headCount,cls
-          },
-          horses:horses.sort((a,b)=>(b.ns||0)-(a.ns||0)),
-          betResult:{
-            type:null,desc:null,wideDesc:null,
-            totalInv:inv,confidence,
-            raceQualityScore,skipRecommended
-          },
-          hitResult:{
-            wideHit:ret>0,wideTicketHit:ret>0,anyHit:ret>0,
-            label:ret>0?'的中':'不的中',
-            ret,inv,profit:ret-inv,
-            roi:inv>0?Math.round(ret/inv*100):0
-          },
-          keyPayouts:{wide:[],umaren:[],tansho:[]}
-        }
+        allResults:scoredHorses.filter(h=>h._resultRank).map(h=>({
+          rank:h._resultRank,num:h.num,name:h.name,
+          jockey:h.jk,last3f:h._resultLast3f,
+          positions:h._resultPositions,
+          popularity:h._resultPopularity,
+          odds:h._resultOdds,
+          bodyWeight:h.wt?String(h.wt):''
+        })).sort((a,b)=>a.rank-b.rank)
       },
-      _scoreVer:'csv_import'
+      _scoreVer:'csv_import_v2'
     };
 
     RACES.push(raceObj);
     imported++;
   }
 
-  if(imported>0){
+  if(imported>0||horseAccumulated>0){
     saveR(RACES);
+    // HORSE_STORE も保存
+    try{localStorage.setItem(HK,JSON.stringify(HORSE_STORE))}catch{}
+    HORSE_DB=buildHorseDB();
     renderList();
   }
-  alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\nファイル: ${fileName}`);
+  alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\n馬DB蓄積: ${horseAccumulated} 出走\nファイル: ${fileName}`);
 }
 
 // === 騎手・調教師複勝率ヘルパー ===
