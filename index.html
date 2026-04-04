@@ -340,13 +340,14 @@ async function initFileStorage(){
 // ===== 蓄積馬データベース =====
 function buildHorseDB(){
   const db={};
-  // ソース1: レース結果から構築
+  // ソース1: allResults から構築（scored から jk・trainer を補完）
   RACES.forEach(r=>{
     if(!r.result?.allResults)return;
     const inf=r.info||{};
     r.result.allResults.forEach(ar=>{
       const name=ar.name;if(!name)return;
       if(!db[name])db[name]=[];
+      const scoredHorse=r.scored?.find(h=>h.num===ar.num);
       db[name].push({
         date:inf.date||'',
         venue:(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,''),
@@ -358,18 +359,47 @@ function buildHorseDB(){
         time:ar.time||'',
         last3f:ar.last3f||0,
         positions:ar.positions||null,
-        jockey:ar.jockey||'',
+        jockey:ar.jockey||scoredHorse?.jk||'',
+        trainer:ar.trainer||scoredHorse?.trainer||'',
         bodyWeight:ar.bodyWeight||''
       });
     });
   });
-  // ソース2: 一括取り込み分（別ストレージ）
+  // ソース2: HORSE_STORE（一括取り込み分）
   Object.entries(HORSE_STORE).forEach(([name,runs])=>{
     if(!db[name])db[name]=[];
     runs.forEach(r=>{
-      // 重複チェック（同日・同順位は追加しない）
       const dup=db[name].some(x=>x.date===r.date&&x.rank===r.rank&&x.dist===r.dist);
       if(!dup)db[name].push(r);
+    });
+  });
+  // ソ���ス3: scored のみのレース（allResults なし）から構築
+  RACES.forEach(r=>{
+    if(r.result?.allResults?.length>0)return;
+    if(!r.result?.top3?.length)return;
+    const inf=r.info||{};
+    const top3=r.result.top3.map(n=>+n);
+    (r.scored||[]).forEach(h=>{
+      if(!h.name)return;
+      const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);
+      if(!rank)return;
+      if(!db[h.name])db[h.name]=[];
+      const dup=db[h.name].some(x=>x.date===(inf.date||'')&&x.rank===rank);
+      if(!dup){
+        db[h.name].push({
+          date:inf.date||'',
+          venue:(inf.course||'').replace(/\d+回/,'').replace(/\d+日/,''),
+          dist:inf.dist||0,
+          surface:inf.type||'',
+          cond:inf.cond||'',
+          rank,
+          runners:r.scored.length,
+          jockey:h.jk||'',
+          trainer:h.trainer||'',
+          last3f:h._resultLast3f||0,
+          bodyWeight:''
+        });
+      }
     });
   });
   Object.values(db).forEach(arr=>arr.sort((a,b)=>(b.date||'').localeCompare(a.date||'')));
@@ -726,25 +756,45 @@ const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.sco
 // ===== BET (v21: 単勝・馬連・ワイドの3択、レース質判定) =====
 function getHorseStatBonus(horse,raceInfo){
   let bonus=0;const reasons=[];
-  // ① 騎手の複勝率ボーナス（フォールバック付き）
-  const jk=horse.jk||(()=>{for(const r of RACES){const ar=r.result?.allResults?.find(a=>a.num===horse.num&&r.scored?.find(h=>h.num===horse.num)?.name===horse.name);if(ar?.jockey)return ar.jockey}return null})();
-  if(jk){
-    let jkTotal=0,jkW3=0;
-    RACES.forEach(r=>{
-      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const arJk=ar.jockey||h?.jk||'';if(arJk&&arJk===jk){jkTotal++;if(ar.rank<=3)jkW3++}});
-      if(!r.result?.allResults?.length){(r.scored||[]).forEach(h=>{if(h.jk&&h.jk===jk&&h._resultRank){jkTotal++;if(h._resultRank<=3)jkW3++}})}
+  const jk=horse.jk;
+  const tr=horse.trainer;
+
+  // RACES の scored + allResults から騎手・調教師の成績を統合集計
+  const jkStats={},trStats={};
+  RACES.forEach(r=>{
+    const top3=r.result?.top3?.map(n=>+n)||[];
+    // scored から集計（allResults有無にかかわらず）
+    (r.scored||[]).forEach(h=>{
+      const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);
+      if(!rank)return;
+      if(h.jk){if(!jkStats[h.jk])jkStats[h.jk]={total:0,w3:0};jkStats[h.jk].total++;if(rank<=3)jkStats[h.jk].w3++}
+      if(h.trainer){if(!trStats[h.trainer])trStats[h.trainer]={total:0,w3:0};trStats[h.trainer].total++;if(rank<=3)trStats[h.trainer].w3++}
     });
-    if(jkTotal>=3){const rate=jkW3/jkTotal;if(rate>=0.40){bonus+=15;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate>=0.30){bonus+=8;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate<0.15){bonus-=8}}
+    // allResults からも補完（scored にない騎手・調教師データ）
+    (r.result?.allResults||[]).forEach(ar=>{
+      const scoredH=r.scored?.find(h=>h.num===ar.num);
+      const arJk=ar.jockey||scoredH?.jk;const arTr=ar.trainer||scoredH?.trainer;
+      const rank=ar.rank;if(!rank)return;
+      if(arJk){if(!jkStats[arJk])jkStats[arJk]={total:0,w3:0};jkStats[arJk].total++;if(rank<=3)jkStats[arJk].w3++}
+      if(arTr){if(!trStats[arTr])trStats[arTr]={total:0,w3:0};trStats[arTr].total++;if(rank<=3)trStats[arTr].w3++}
+    });
+  });
+
+  // ① 騎手ボーナス
+  const jkData=jk?jkStats[jk]:null;
+  if(jkData&&jkData.total>=3){
+    const rate=jkData.w3/jkData.total;
+    if(rate>=0.40){bonus+=15;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkData.total+'走)')}
+    else if(rate>=0.28){bonus+=8;reasons.push('騎手複勝率'+Math.round(rate*100)+'%('+jkData.total+'走)')}
+    else if(rate<0.15){bonus-=8}
   }
-  // ② 調教師の複勝率ボーナス（フォールバック付き）
-  const tr=horse.trainer||(()=>{for(const r of RACES){const ar=r.result?.allResults?.find(a=>a.name===horse.name);if(ar?.trainer)return ar.trainer}return null})();
-  if(tr){
-    let trTotal=0,trW3=0;
-    RACES.forEach(r=>{
-      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const arTr=ar.trainer||h?.trainer||'';if(arTr&&arTr===tr){trTotal++;if(ar.rank<=3)trW3++}});
-      if(!r.result?.allResults?.length){(r.scored||[]).forEach(h=>{if(h.trainer&&h.trainer===tr&&h._resultRank){trTotal++;if(h._resultRank<=3)trW3++}})}
-    });
-    if(trTotal>=3){const rate=trW3/trTotal;if(rate>=0.45){bonus+=12;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trTotal+'走)')}else if(rate>=0.35){bonus+=6;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trTotal+'走)')}else if(rate<0.15){bonus-=6}}
+  // ② 調教師ボーナス
+  const trData=tr?trStats[tr]:null;
+  if(trData&&trData.total>=3){
+    const rate=trData.w3/trData.total;
+    if(rate>=0.45){bonus+=12;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trData.total+'走)')}
+    else if(rate>=0.33){bonus+=6;reasons.push('厩舎複勝率'+Math.round(rate*100)+'%('+trData.total+'走)')}
+    else if(rate<0.15){bonus-=6}
   }
   // ③ 条件適性ボーナス（馬場・距離・競馬場）
   const surf=raceInfo?.type||'';const dist=raceInfo?.dist||0;const venue=(raceInfo?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
@@ -758,7 +808,11 @@ function getHorseStatBonus(horse,raceInfo){
   const pop=horse.pop;
   if(pop>=1&&pop<=18){
     let pTotal=0,pW3=0;
-    RACES.forEach(r=>{(r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const hPop=h?.pop||ar.popularity;if(hPop===pop){pTotal++;if(ar.rank<=3)pW3++}})});
+    RACES.forEach(r=>{
+      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);const hPop=h?.pop||ar.popularity;if(hPop===pop){pTotal++;if(ar.rank<=3)pW3++}});
+      const top3=r.result?.top3?.map(n=>+n)||[];
+      if(!r.result?.allResults?.length){(r.scored||[]).forEach(h=>{const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;if(h.pop===pop){pTotal++;if(rank<=3)pW3++}})}
+    });
     if(pTotal>=5){const exp=pW3/pTotal;const thr={1:0.55,2:0.45,3:0.38,4:0.32,5:0.28,6:0.24,7:0.20,8:0.18,9:0.16,10:0.14}[pop]||0.12;if(exp>thr+0.06){bonus+=10;reasons.push(pop+'番人気期待値高('+Math.round(exp*100)+'%)')}else if(exp<thr-0.06){bonus-=8}}
   }
   return{bonus,reasons};
@@ -844,7 +898,7 @@ function genBet(scored,raceInfo,marketOdds){
     const sb=getHorseStatBonus(h,raceInfo);
     h.statBonus=sb.bonus;h.statReasons=sb.reasons;
     h.totalScore=h.ns+Math.round(sb.bonus*0.5);
-    if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'bonus:',sb.bonus,'reasons:',sb.reasons);
+    if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'bonus:',sb.bonus,'totalScore:',h.totalScore,'reasons:',sb.reasons);
   });
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
