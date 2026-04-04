@@ -2590,6 +2590,27 @@ function importAnalysisCSV(text,fileName){
   alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\nファイル: ${fileName}`);
 }
 
+// === 騎手・調教師複勝率ヘルパー ===
+function calcJkRateForDetail(jkName){
+  if(!jkName)return null;
+  let total=0,w3=0;
+  RACES.forEach(r=>{
+    const top3=(r.result?.top3||[]).map(n=>+n);
+    (r.scored||[]).forEach(h=>{if(h.jk!==jkName)return;const rank=h._resultRank||(top3.includes(h.num)?top3.indexOf(h.num)+1:0);if(!rank)return;total++;if(rank<=3)w3++});
+    (r.result?.allResults||[]).forEach(ar=>{const sc=(r.scored||[]).find(h=>h.num===ar.num);if((ar.jockey||sc?.jk||'')!==jkName)return;total++;if(ar.rank<=3)w3++});
+  });
+  return total>=3?{rate:Math.round(w3/total*100),total}:null;
+}
+function calcTrRateForDetail(trName){
+  if(!trName)return null;
+  let total=0,w3=0;
+  RACES.forEach(r=>{
+    const top3=(r.result?.top3||[]).map(n=>+n);
+    (r.scored||[]).forEach(h=>{if(h.trainer!==trName)return;const rank=h._resultRank||(top3.includes(h.num)?top3.indexOf(h.num)+1:0);if(!rank)return;total++;if(rank<=3)w3++});
+  });
+  return total>=3?{rate:Math.round(w3/total*100),total}:null;
+}
+
 // === DETAIL ===
 function renderDetail(id){
   try{
@@ -2694,63 +2715,50 @@ function renderDetail(id){
   if(!r.info.surf||!r.info.cond||!r.info.type){
     h+=`<div style="background:rgba(196,30,58,.08);border:2px solid var(--red);padding:10px 14px;margin-bottom:8px;border-radius:4px;font-size:13px;font-weight:700;color:var(--red)">⚠️ 馬場データ未入力 — ${!r.info.surf?'コース ':''}${!r.info.cond?'馬場状態 ':''}${!r.info.type?'芝/ダート ':''}が不足しています。予想精度が低下する可能性があります。</div>`;
   }
-  // === 競馬新聞形式：全出走馬をスコア順に表示 ===
-  h+=`<div class="pnl"><h3 class="r">📰 出走馬分析（スコア順）</h3>`;
-  h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px">全${s.length}頭 ／ スコアが高いほど好走の可能性が高いと判定</div>`;
-  s.forEach(x=>{
-    const comment=generateHorseComment(x,r);
-    h+=`<div style="background:var(--p2);border:2px solid var(--bdr);border-radius:6px;padding:12px;margin-bottom:8px">`;
-    // 馬番・印・馬名・スコア
-    const _mi=s.indexOf(x);const _mark=_marks[_mi]||'';const _mc=_markColors[_mi]||'var(--dim)';
-    h+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-      <span style="font-size:20px;font-weight:900;color:${_mc};min-width:24px">${_mark}</span>
-      <span class="wk" style="background:${WC[x.waku]};color:${WT[x.waku]};width:32px;height:32px;font-size:15px">${x.num}</span>
-      <span style="font-family:'Shippori Mincho',serif;font-weight:900;font-size:16px">${x.name}</span>
-      <span style="margin-left:auto;font-size:20px;font-weight:900;color:var(--red)">${x.ns}<span style="font-size:11px;font-weight:500;color:var(--dim)">点</span></span>
-    </div>`;
-    // 【能力】
-    const abil=[];
-    if(x.f['前走'])abil.push('前走'+x.f['前走'].v);
-    if(x.f['着差'])abil.push('着差'+x.f['着差'].v);
-    if(x.f['上がり'])abil.push('上がり'+x.f['上がり'].v);
-    if(x.f['トレンド'])abil.push('トレンド：'+x.f['トレンド'].v);
-    if(abil.length>0){
-      h+=`<div style="font-size:11px;font-weight:900;color:var(--red);margin-bottom:2px">【能力】</div>`;
-      h+=`<div style="font-size:12px;line-height:1.6;margin-bottom:6px;padding-left:4px">${abil.join(' ／ ')}</div>`;
-    }
-    // 【条件】
-    const cond=[];
-    if(x.f['距離'])cond.push('距離：'+x.f['距離'].v);
-    if(x.f['コース'])cond.push('コース：'+x.f['コース'].v);
-    if(x.f['馬場'])cond.push('馬場：'+x.f['馬場'].v);
-    if(x.f['競馬場'])cond.push('競馬場：'+x.f['競馬場'].v);
-    if(x.f['回り'])cond.push('回り：'+x.f['回り'].v);
-    if(cond.length>0){
-      h+=`<div style="font-size:11px;font-weight:900;color:var(--blu);margin-bottom:2px">【条件】</div>`;
-      h+=`<div style="font-size:12px;line-height:1.6;margin-bottom:6px;padding-left:4px">${cond.join(' ／ ')}</div>`;
-    }
-    // 【状態】
-    const state=[];
-    if(x.f['体重'])state.push('体重：'+x.f['体重'].v);
-    if(x.f['間隔'])state.push('間隔：'+x.f['間隔'].v);
-    if(x.f['斤量'])state.push('斤量：'+x.f['斤量'].v);
-    if(state.length>0){
-      h+=`<div style="font-size:11px;font-weight:900;color:var(--grn);margin-bottom:2px">【状態】</div>`;
-      h+=`<div style="font-size:12px;line-height:1.6;margin-bottom:6px;padding-left:4px">${state.join(' ／ ')}</div>`;
-    }
-    // 【コメント】
-    if(comment){
-      h+=`<div style="font-size:11px;font-weight:900;color:var(--gld);margin-bottom:2px">【コメント】</div>`;
-      h+=`<div style="font-size:12px;line-height:1.8;color:var(--ink);padding-left:4px">${comment}</div>`;
-    }
-    // 【統計補正】
-    if(x.statReasons?.length>0){
-      h+=`<div style="font-size:11px;font-weight:900;color:var(--gld);margin-bottom:2px;margin-top:6px">【統計補正】</div>`;
-      h+=`<div style="font-size:12px;line-height:1.8;padding-left:4px">${x.statReasons.join(' ／ ')}</div>`;
-    }
+  // === 推奨馬の詳細解説 ===
+  if(b&&!b.skipRecommended&&b.tickets?.length>0){
+    const recHorses=[];
+    b.tickets.forEach(t=>{(t.horses||[]).forEach(h2=>{if(!recHorses.find(x=>x.num===h2.num))recHorses.push(h2)})});
+    const markLabels=['◎','○','▲','△'];
+    const markColorsD=['var(--red)','var(--blu)','var(--grn)','var(--gld)'];
+    h+=`<div class="pnl"><h3 class="b">🔍 推奨馬の根拠</h3>`;
+    recHorses.forEach((horse,idx)=>{
+      const x=s.find(sc=>sc.num===horse.num);if(!x)return;
+      const mark=markLabels[idx]||'△';const mColor=markColorsD[idx]||'var(--dim)';
+      const jkRate=calcJkRateForDetail(x.jk);
+      const trRate=calcTrRateForDetail(x.trainer);
+      h+=`<div style="background:var(--p2);border:2px solid var(--bdr);border-radius:6px;padding:14px;margin-bottom:12px">`;
+      h+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;border-bottom:1px solid var(--bdr);padding-bottom:8px">
+        <span style="font-size:24px;font-weight:900;color:${mColor}">${mark}</span>
+        <span class="wk" style="background:${WC[x.waku]||'#ccc'};color:${WT[x.waku]||'#000'};width:32px;height:32px;font-size:15px">${x.num}</span>
+        <span style="font-family:'Shippori Mincho',serif;font-weight:900;font-size:18px">${x.name}</span>
+        <span style="margin-left:auto;font-size:18px;font-weight:900;color:var(--red)">${x.ns}<span style="font-size:11px;color:var(--dim)">点</span></span>
+      </div>`;
+      const items=[];
+      const l=x.prev?.[0];
+      if(l){const ratio=Math.round(l.fin/l.run*100);const ev=l.fin<=2?'好走':l.fin<=4?'まずまず':l.fin<=8?'平凡':'苦戦';items.push({label:'前走成績',value:`${l.fin}着/${l.run}頭中（上位${ratio}%）`,comment:`前走は${l.venue||''}で${l.fin}着。${ev}。${l.gap!=null?'着差'+l.gap+'秒。':''}`,color:l.fin<=3?'var(--grn)':l.fin<=6?'var(--gld)':'var(--red)'})}
+      if(x.f?.['上がり']){const c=x.f['上がり'].c;items.push({label:'上がり3F',value:x.f['上がり'].v,comment:c==='g'?'末脚が速く、直線での伸びが期待できる。':c==='b'?'上がりが遅く、末脚に課題がある。':'上がりは平均的。',color:c==='g'?'var(--grn)':c==='b'?'var(--red)':'var(--dim)'})}
+      if(x.f?.['トレンド']){const c=x.f['トレンド'].c;items.push({label:'近走トレンド',value:x.f['トレンド'].v,comment:c==='g'?'着順が改善傾向にあり、上昇気流に乗っている。':c==='b'?'着順が悪化傾向。状態に注意が必要。':'着順は安定して推移している。',color:c==='g'?'var(--grn)':c==='b'?'var(--red)':'var(--dim)'})}
+      if(x.f?.['距離']){const c=x.f['距離'].c;items.push({label:'距離適性',value:x.f['距離'].v,comment:c==='g'?'前走と同じ距離。距離慣れしており適性は高い。':x.f['距離'].v.includes('延長')?'距離延長。スタミナが問われる。':'距離短縮。速い流れへの対応がポイント。',color:c==='g'?'var(--grn)':'var(--gld)'})}
+      if(x.f?.['コース']){const c=x.f['コース'].c;items.push({label:'コース適性',value:x.f['コース'].v,comment:c==='g'?'前走と同じコース種別で実績あり。':'前走と異なるコース種別。適性がポイント。',color:c==='g'?'var(--grn)':'var(--red)'})}
+      if(x.f?.['馬場']){const c=x.f['馬場'].c;items.push({label:'馬場適性',value:x.f['馬場'].v,comment:c==='g'?'今回と同じ馬場状態での好走実績あり。':'今回と異なる馬場状態。道悪適性がポイント。',color:c==='g'?'var(--grn)':'var(--gld)'})}
+      if(x.f?.['競馬場']){const c=x.f['競馬場'].c;items.push({label:'競馬場実績',value:x.f['競馬場'].v,comment:c==='g'?'同競馬場での好走実績あり。コース適性が高い。':'異なる競馬場からの転戦。',color:c==='g'?'var(--grn)':'var(--dim)'})}
+      if(x.jk){const jr=jkRate;const jc=jr?`蓄積データでの複勝率${jr.rate}%（${jr.total}走）。${jr.rate>=40?'高い複勝率で信頼できる騎手。':jr.rate>=28?'標準的な複勝率。':'複勝率がやや低い。'}`:'データ蓄積中。';items.push({label:'騎手',value:x.jk+(jr?`（複勝率${jr.rate}%）`:''),comment:jc,color:jr&&jr.rate>=40?'var(--grn)':jr&&jr.rate>=28?'var(--gld)':'var(--dim)'})}
+      if(x.trainer){const tr=trRate;const tc=tr?`蓄積データでの複勝率${tr.rate}%（${tr.total}走）。${tr.rate>=45?'信頼できる厩舎。':tr.rate>=33?'標準的な厩舎成績。':'厩舎成績がやや低め。'}`:'データ蓄積中。';items.push({label:'調教師',value:x.trainer+(tr?`（複勝率${tr.rate}%）`:''),comment:tc,color:tr&&tr.rate>=45?'var(--grn)':'var(--dim)'})}
+      if(x.wc!=null){const w=Math.abs(x.wc);const wc2=w<=2?'馬体重が安定しており、仕上がりは良好。':w<=4?'馬体重の変化は軽微。':x.wc>0?`+${x.wc}kgと増加。成長分か絞れていないか要注意。`:`${x.wc}kgと減少。絞れて良い可能性もあるが急減は注意。`;items.push({label:'馬体重',value:`${x.wt}kg（${x.wc>=0?'+':''}${x.wc}kg）`,comment:wc2,color:w<=4?'var(--grn)':'var(--gld)'})}
+      items.forEach(item=>{
+        h+=`<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed var(--bdr);align-items:flex-start">
+          <div style="min-width:80px;font-size:11px;font-weight:700;color:var(--dim);padding-top:2px">${item.label}</div>
+          <div style="flex:1">
+            <span style="font-size:13px;font-weight:700;color:${item.color}">${item.value}</span>
+            <div style="font-size:12px;color:var(--dim);margin-top:2px;line-height:1.6">${item.comment}</div>
+          </div>
+        </div>`;
+      });
+      h+=`</div>`;
+    });
     h+=`</div>`;
-  });
-  h+=`</div>`;
+  }
 
   } // end if(!isPast)
   // Result
