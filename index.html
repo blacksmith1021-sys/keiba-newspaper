@@ -893,25 +893,30 @@ function genBet(scored,raceInfo,marketOdds){
     if(!r.length)r.push('総合スコア');return r;
   }
 
-  // 統計ボーナスを加算した総合スコアを計算
+  // 統計ボーナスを付与（ns は変更しない、ソート順も変えない）
   scored.forEach(h=>{
-    const sb=getHorseStatBonus(h,raceInfo);
-    h.statBonus=sb.bonus;h.statReasons=sb.reasons;
-    h.totalScore=h.ns+Math.round(sb.bonus*0.5);
-    if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'bonus:',sb.bonus,'totalScore:',h.totalScore,'reasons:',sb.reasons);
+    try{
+      const sb=getHorseStatBonus(h,raceInfo);
+      h.statBonus=sb.bonus||0;
+      h.statReasons=sb.reasons||[];
+      h.totalScore=(h.ns||0)+Math.round((sb.bonus||0)*0.5);
+      if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'ns:',h.ns,'bonus:',sb.bonus,'reasons:',sb.reasons);
+    }catch(e){
+      h.statBonus=0;h.statReasons=[];h.totalScore=h.ns||0;
+      console.warn('[StatBonus error]',h.name,e.message);
+    }
   });
 
   const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
 
-  // ===== 軸馬選定（totalScore基準） =====
+  // ===== 軸馬選定（ns基準） =====
   const STRONG_F=['前走','着差','上がり','トレンド','距離','コース','馬場','競馬場'];
   function countG(h){return STRONG_F.filter(k=>h.f?.[k]?.c==='g').length}
-  const scoredByTotal=[...scored].sort((a,b)=>b.totalScore-a.totalScore);
-  const himoPool=scoredByTotal.filter(h=>h.totalScore>=50&&h.totalScore<80);
-  // 軸馬: totalScore基準（80以上。人気データがあれば1〜3番手を優先）
-  let A=scoredByTotal.find(h=>h.totalScore>=80&&h.pop&&h.pop<=3)||scoredByTotal.find(h=>h.totalScore>=80&&h.pop&&h.pop<=5)||scoredByTotal.find(h=>h.totalScore>=80)||null;
-  let B=scoredByTotal.filter(h=>h!==A).find(h=>h.totalScore>=50)||null;
-  let C=scoredByTotal.filter(h=>h!==A&&h!==B).find(h=>h.totalScore>=50)||null;
+  const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
+  // 軸馬: ns基準（80以上。人気データがあれば1〜3番手を優先）
+  let A=scored.find(h=>h.ns>=80&&h.pop&&h.pop<=3)||scored.find(h=>h.ns>=80&&h.pop&&h.pop<=5)||scored.find(h=>h.ns>=80)||null;
+  let B=scored.filter(h=>h!==A).find(h=>h.ns>=50)||null;
+  let C=scored.filter(h=>h!==A&&h!==B).find(h=>h.ns>=50)||null;
 
   // ===== レース質判定 =====
   const topNs=scored[0]?.ns||0;
