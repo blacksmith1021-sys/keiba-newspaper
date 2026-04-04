@@ -1777,10 +1777,7 @@ function getHitInfo(r){
   const wideTicketHit=hitTickets.some(h=>h.type==='ワイド');
   const fukHit=hitTickets.some(h=>h.type==='複勝');
 
-  // 全券種照合（参考表示用）
-  const tickets=checkAllTickets(r);
-
-  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,tickets,skip:false,hitTickets};
+  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,skip:false,hitTickets};
 }
 
 // ===== LOSS ANALYSIS =====
@@ -3404,45 +3401,6 @@ function renderDetail(id){
       h+=`</div>`;
     }
     h+=`<button class="btn-s" onclick="resetResult('${id}')" style="margin-top:8px">結果を修正</button>`;
-    
-    // === 全券種照合パネル ===
-    if(hi.tickets){
-      const tk=hi.tickets;
-      const nameOf=n=>{const hh=s.find(x=>x.num===n);return hh?hh.name:''};
-      h+=`<div style="margin-top:12px;border-top:2px solid var(--bdt);padding-top:10px">`;
-      h+=`<div style="font-weight:700;font-size:13px;color:var(--blu);margin-bottom:8px">🎯 全券種照合（もし買っていたら）</div>`;
-      h+=`<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse;white-space:nowrap">`;
-      h+=`<tr style="background:var(--ink);color:var(--p)">
-        <th style="padding:4px 8px;text-align:left">券種</th>
-        <th style="padding:4px 8px;text-align:left">買い目</th>
-        <th style="padding:4px 8px;text-align:center">結果</th>
-        <th style="padding:4px 8px;text-align:right">配当(100円)</th>
-        <th style="padding:4px 8px;text-align:right">100円購入時</th>
-      </tr>`;
-      const A=r.bet?.best?.horses?.[0]?.num||0,B=r.bet?.best?.horses?.[1]?.num||0;
-      const rows=[
-        {name:'単勝',key:'単勝',desc:A+'番 '+nameOf(A)},
-        {name:'複勝A',key:'複勝A',desc:tk['複勝A']?.num+'番 '+nameOf(tk['複勝A']?.num)},
-        {name:'複勝B',key:'複勝B',desc:tk['複勝B']?.num+'番 '+nameOf(tk['複勝B']?.num)},
-        {name:'ワイド',key:'ワイド',desc:A+'─'+B},
-        {name:'馬連',key:'馬連',desc:A+'─'+B},
-        {name:'馬単',key:'馬単',desc:A+'→'+B},
-        {name:'3連複',key:'3連複',desc:A+'─'+B+'─'+(tk['3連複']?.third||'?')},
-        {name:'3連単',key:'3連単',desc:A+'→'+B+'→'+(tk['3連単']?.third||'?')}
-      ];
-      rows.forEach(rw=>{
-        const t=tk[rw.key];if(!t)return;
-        const bg=t.hit?'rgba(45,106,48,.08)':'var(--p)';
-        h+=`<tr style="background:${bg}">
-          <td style="padding:3px 8px;font-weight:700">${rw.name}</td>
-          <td style="padding:3px 8px;color:var(--dim)">${rw.desc}</td>
-          <td style="padding:3px 8px;text-align:center;font-weight:900;color:${t.hit?'var(--grn)':'var(--red)'}">${t.hit?'✓':'✗'}</td>
-          <td style="padding:3px 8px;text-align:right">${t.pay>0?t.pay.toLocaleString()+'円':'─'}</td>
-          <td style="padding:3px 8px;text-align:right;font-weight:700;color:${t.hit&&t.pay>0?'var(--grn)':'var(--dim)'}">${t.hit&&t.pay>0?'+'+t.pay.toLocaleString()+'円':'─'}</td>
-        </tr>`;
-      });
-      h+=`</table></div></div>`;
-    }
     
     // === 全着順詳細 ===
     if(r.result.allResults?.length>0){
