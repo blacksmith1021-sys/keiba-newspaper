@@ -4015,6 +4015,19 @@ async function doGhLoad(){
   });
   updateCountBadge();
   showView('input');
+  // Service Worker 登録
+  if('serviceWorker'in navigator){
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      reg.addEventListener('updatefound',()=>{
+        const nw=reg.installing;
+        nw.addEventListener('statechange',()=>{
+          if(nw.state==='installed'&&navigator.serviceWorker.controller){
+            showSaveStatus('🔄 アプリが更新されました。再読み込みで反映されます。','ok');
+          }
+        });
+      });
+    }).catch(e=>console.warn('SW登録失敗:',e));
+  }
 })();
 </script>
 </body>
