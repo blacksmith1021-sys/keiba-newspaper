@@ -750,6 +750,138 @@ if(h.name&&HORSE_DB[h.name]){
   h._histData=hist;
 }
 
+// ===【データ分析ルール補正】===
+
+// RULE 3: 競馬場×距離の荒れ条件（1番人気の信頼度が低い条件）
+const R3_UPSET={'小倉1700':6,'阪神1200':5,'小倉2000':4,'小倉1200':4};
+const r3key=raceVenue+dist;
+if(R3_UPSET[r3key]){
+  // 1番人気（pop=1）の信頼度を下げ、2-5番人気は加点
+  if(h.pop===1){s-=R3_UPSET[r3key];f['荒れ条件']={v:r3key+'(1番人気不安)',c:'b'}}
+  else if(h.pop>=2&&h.pop<=5){s+=Math.round(R3_UPSET[r3key]*0.5);f['荒れ条件']={v:r3key+'(穴チャンス)',c:'g'}}
+}
+// 堅い条件: 1番人気を加点
+const R3_SOLID={'中山1600':4,'中山1800':5,'阪神1400':4,'京都1800':3};
+if(R3_SOLID[r3key]&&h.pop===1){s+=R3_SOLID[r3key];f['堅い条件']={v:r3key+'(1番人気堅い)',c:'g'}}
+
+// RULE 4: 騎手×競馬場/距離/コースの相性
+const jkName=(h.jk||'').replace(/[\s　]+/g,'');
+if(jkName&&raceVenue){
+  // 騎手×競馬場
+  const JK_VENUE={
+    'C.ルメール':{'京都':8,'東京':5},
+    'Ｃ．ルメール':{'京都':8,'東京':5},
+    '川田将雅':{'中京':6,'阪神':5},
+    '横山武史':{'中京':6,'京都':-8},
+    '松山弘平':{'中京':4,'阪神':3,'東京':-8},
+    '戸崎圭太':{'中山':3,'東京':-4},
+    '横山和生':{'東京':4,'中山':-5},
+    '武豊':{'阪神':3,'京都':-2}
+  };
+  const jkV=JK_VENUE[jkName];
+  if(jkV&&jkV[raceVenue]!=null){
+    const pts=jkV[raceVenue];
+    s+=pts;
+    if(pts>=3)f['騎手場']={v:jkName+'×'+raceVenue+'得意',c:'g'};
+    else if(pts<=-3)f['騎手場']={v:jkName+'×'+raceVenue+'苦手',c:'b'};
+  }
+  // 騎手×距離帯
+  const distBand=dist<=1200?'短':dist<=1800?'中':'長';
+  const JK_DIST={
+    'C.ルメール':{'長':6,'短':-3},
+    'Ｃ．ルメール':{'長':6,'短':-3},
+    '川田将雅':{'長':6,'短':5},
+    '岩田望来':{'中':5,'長':-3},
+    '戸崎圭太':{'短':5,'中':-4},
+    '武豊':{'短':5,'中':-6},
+    '坂井瑠星':{'長':5,'短':-5}
+  };
+  const jkD=JK_DIST[jkName];
+  if(jkD&&jkD[distBand]!=null){
+    const pts=jkD[distBand];
+    s+=pts;
+    if(pts>=3)f['騎手距離']={v:jkName+'×'+distBand+'距離得意',c:'g'};
+    else if(pts<=-3)f['騎手距離']={v:jkName+'×'+distBand+'距離苦手',c:'b'};
+  }
+  // 騎手×芝/ダート
+  const JK_SURF={
+    '横山武史':{'芝':-3,'ダート':5},
+    '松山弘平':{'ダート':3}
+  };
+  const jkS=JK_SURF[jkName];
+  if(jkS&&jkS[surf]!=null){
+    const pts=jkS[surf];
+    s+=pts;
+    if(pts>=3)f['騎手馬場']={v:jkName+'×'+surf+'得意',c:'g'};
+    else if(pts<=-3)f['騎手馬場']={v:jkName+'×'+surf+'苦手',c:'b'};
+  }
+}
+
+// RULE 5×競馬場: 脚質×競馬場の傾向
+if(h.prev?.length>0){
+  const positions=h.prev.filter(p=>p.pos?.length>=2).map(p=>p.pos[0]);
+  if(positions.length>0){
+    const avgPos=positions.reduce((a,b)=>a+b,0)/positions.length;
+    const isEscape=avgPos<=2;
+    const isLeader=avgPos<=4;
+    const isCloser=avgPos>=8;
+    // 競馬場別の脚質補正
+    const VENUE_PACE={
+      '小倉':{escape:6,leader:3,closer:-3},
+      '阪神':{escape:5,leader:4,closer:-3},
+      '中京':{escape:4,leader:3,closer:-2},
+      '東京':{escape:3,leader:2,closer:0},
+      '中山':{escape:3,leader:4,closer:-2},
+      '京都':{escape:-3,leader:4,closer:2}
+    };
+    const vp=VENUE_PACE[raceVenue];
+    if(vp){
+      if(isEscape){s+=vp.escape;if(vp.escape>=4)f['脚質場']={v:'逃げ×'+raceVenue+'有利',c:'g'};else if(vp.escape<=-2)f['脚質場']={v:'逃げ×'+raceVenue+'不利',c:'b'}}
+      else if(isLeader){s+=vp.leader;if(vp.leader>=4)f['脚質場']={v:'先行×'+raceVenue+'有利',c:'g'}}
+      else if(isCloser){s+=vp.closer;if(vp.closer<=-2)f['脚質場']={v:'追込×'+raceVenue+'不利',c:'b'};else if(vp.closer>=2)f['脚質場']={v:'差し×'+raceVenue+'有利',c:'g'}}
+    }
+  }
+}
+
+// RULE 6: 馬番の内外有利
+if(h.num&&hs.length>=8){
+  const totalHorses=hs.length;
+  const isInner=h.num<=Math.ceil(totalHorses/3);
+  const isOuter=h.num>=Math.ceil(totalHorses*2/3);
+  if(!isDirt){
+    // 芝: 内枠有利
+    const TURF_INNER={'東京':5,'阪神':4,'中京':3,'中山':2};
+    const tip=TURF_INNER[raceVenue]||0;
+    if(isInner&&tip){s+=tip;f['枠順']={v:'内枠('+h.num+'番)×'+raceVenue+'芝',c:'g'}}
+    else if(isOuter&&tip>=3){s-=Math.round(tip*0.5);f['枠順']={v:'外枠('+h.num+'番)×'+raceVenue+'芝',c:'b'}}
+  }else{
+    // ダート: 外枠有利
+    const DIRT_OUTER={'中山':4,'京都':3,'中京':3};
+    const dop=DIRT_OUTER[raceVenue]||0;
+    if(isOuter&&dop){s+=dop;f['枠順']={v:'外枠('+h.num+'番)×'+raceVenue+'ダート',c:'g'}}
+    else if(isInner&&dop>=3){s-=Math.round(dop*0.5);f['枠順']={v:'内枠('+h.num+'番)×'+raceVenue+'ダート',c:'b'}}
+  }
+}
+
+// RULE 7: 馬体重増減（微調整・既存の体重補正を補完）
+if(h.wc!=null){
+  if(h.wc>=2&&h.wc<=4)s+=2; // 微増が最も好成績
+  else if(h.wc<=-12)s-=3;   // 大幅減は危険信号
+  else if(h.wc>=12)s-=2;    // 大幅増も注意
+}
+
+// RULE 8: 性齢補正
+if(h.sex&&h.age){
+  if(h.sex==='牡'&&h.age===4)s+=3;       // 牡4歳が最充実
+  else if(h.age>=7)s-=3;                  // 高齢馬は減点
+  if(h.sex==='牝'&&h.age>=6)s-=2;        // 高齢牝馬はさらに減点
+}
+
+// RULE 9: 馬場状態の影響
+if(isSlight&&h.pop===2)s+=2;              // 稍重で2番人気の信頼度上昇
+if(isHeavy&&h.pop===3)s+=3;              // 重馬場で3番人気の信頼度上昇
+if(isHeavy&&h.pop===4)s-=2;             // 重馬場で4番人気の信頼度低下
+
 h.score=Math.max(0,s);h.f=f});
 // 正規化は最高得点を100として相対値
 const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round((h.ns/100)*h.odds*100-100)/100:0});hs.sort((a,b)=>b.score-a.score);return hs}
