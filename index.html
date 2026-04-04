@@ -411,6 +411,31 @@ function saveSettings(s){
   try{localStorage.setItem(SETTINGS_KEY,json)}catch{}
   if(_dirHandle)_scheduleWrite('settings.json',json);
   _scheduleDbSave();
+  // data/settings.json にも保存（Service Worker経由でキャッシュ）
+  _saveSettingsFile(json);
+}
+// data/settings.json への保存・読込
+let _settingsFileCache=null;
+async function _saveSettingsFile(json){
+  try{
+    // Cache APIに保存（fetch可能な形式で永続化）
+    const cache=await caches.open('keiba-settings-v1');
+    await cache.put(new Request('/data/settings.json'),new Response(json,{headers:{'Content-Type':'application/json'}}));
+  }catch(e){console.warn('settings file cache save failed:',e)}
+}
+async function _loadSettingsFile(){
+  // 1. Cache API から読み込み
+  try{
+    const cache=await caches.open('keiba-settings-v1');
+    const res=await cache.match(new Request('/data/settings.json'));
+    if(res){const d=await res.json();if(d&&typeof d==='object')return d}
+  }catch{}
+  // 2. data/settings.json を fetch（初回デプロイ用）
+  try{
+    const res=await fetch('data/settings.json');
+    if(res.ok){const d=await res.json();if(d&&typeof d==='object')return d}
+  }catch{}
+  return null;
 }
 
 // --- 保存ステータス表示 ---
@@ -3942,15 +3967,21 @@ function setGistId(id){
   _idbSave(GIST_ID_IDB_KEY,id).catch(()=>{});
 }
 async function restoreGhToken(){
-  // IndexedDB優先（キャッシュ削除に強い）
+  // 1. IndexedDB
   try{const t=await _idbLoad(GH_TOKEN_IDB_KEY);if(t){const s=loadSettings();s.ghToken=t;saveSettings(s);return t}}catch{}
-  // 次にlocalStorage
+  // 2. localStorage
   const ls=getGhToken();if(ls){_idbSave(GH_TOKEN_IDB_KEY,ls).catch(()=>{});return ls}
+  // 3. data/settings.json（キャッシュ削除後の復元用）
+  try{const f=await _loadSettingsFile();if(f?.ghToken){const s=loadSettings();s.ghToken=f.ghToken;saveSettings(s);_idbSave(GH_TOKEN_IDB_KEY,f.ghToken).catch(()=>{});return f.ghToken}}catch{}
   return '';
 }
 async function restoreGistId(){
+  // 1. IndexedDB
   try{const id=await _idbLoad(GIST_ID_IDB_KEY);if(id){const s=loadSettings();s.gistId=id;saveSettings(s);return id}}catch{}
+  // 2. localStorage
   const ls=getGistId();if(ls){_idbSave(GIST_ID_IDB_KEY,ls).catch(()=>{});return ls}
+  // 3. data/settings.json（キャッシュ削除後の復元用）
+  try{const f=await _loadSettingsFile();if(f?.gistId){const s=loadSettings();s.gistId=f.gistId;saveSettings(s);_idbSave(GIST_ID_IDB_KEY,f.gistId).catch(()=>{});return f.gistId}}catch{}
   return '';
 }
 function getLastSync(){return loadSettings().lastSync||''}
@@ -4352,8 +4383,20 @@ async function doGhLoad(){
 
 // Init
 (async()=>{
-  // 1. ファイルストレージ自動復元
-  // 0. IndexedDBからデータ復元（localStorage→IDB初回マイグレーション含む）
+  // 0. settings.json からの設定復元（キャッシュ削除後の復元用）
+  try{
+    const fileSett=await _loadSettingsFile();
+    if(fileSett&&typeof fileSett==='object'){
+      const curr=loadSettings();
+      // localStorageが空またはgistIdがない場合、settings.jsonから復元
+      if(!curr.gistId&&fileSett.gistId){curr.gistId=fileSett.gistId;console.log('settings.jsonからGist ID復元:',fileSett.gistId)}
+      if(!curr.ghToken&&fileSett.ghToken){curr.ghToken=fileSett.ghToken;console.log('settings.jsonからGHトークン復元')}
+      if(!curr.dailyBudget&&fileSett.dailyBudget)curr.dailyBudget=fileSett.dailyBudget;
+      try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(curr))}catch{}
+    }
+  }catch(e){console.warn('settings.json復元スキップ:',e)}
+
+  // 1. IndexedDBからデータ復元（localStorage→IDB初回マイグレーション含む）
   const idbRestored=await _loadFromIdb();
   if(idbRestored){HORSE_DB=buildHorseDB();console.log('IndexedDBからデータ復元完了')}
   const fsOk=await initFileStorage();
