@@ -411,31 +411,6 @@ function saveSettings(s){
   try{localStorage.setItem(SETTINGS_KEY,json)}catch{}
   if(_dirHandle)_scheduleWrite('settings.json',json);
   _scheduleDbSave();
-  // data/settings.json にも保存（Service Worker経由でキャッシュ）
-  _saveSettingsFile(json);
-}
-// data/settings.json への保存・読込
-let _settingsFileCache=null;
-async function _saveSettingsFile(json){
-  try{
-    // Cache APIに保存（fetch可能な形式で永続化）
-    const cache=await caches.open('keiba-settings-v1');
-    await cache.put(new Request('/data/settings.json'),new Response(json,{headers:{'Content-Type':'application/json'}}));
-  }catch(e){console.warn('settings file cache save failed:',e)}
-}
-async function _loadSettingsFile(){
-  // 1. Cache API から読み込み
-  try{
-    const cache=await caches.open('keiba-settings-v1');
-    const res=await cache.match(new Request('/data/settings.json'));
-    if(res){const d=await res.json();if(d&&typeof d==='object')return d}
-  }catch{}
-  // 2. data/settings.json を fetch（初回デプロイ用）
-  try{
-    const res=await fetch('data/settings.json');
-    if(res.ok){const d=await res.json();if(d&&typeof d==='object')return d}
-  }catch{}
-  return null;
 }
 
 // --- 保存ステータス表示 ---
@@ -3955,9 +3930,23 @@ const GH_API='https://api.github.com';
 const GH_TOKEN_IDB_KEY='ghToken';
 const GIST_ID_IDB_KEY='gistId';
 
-// --- トークン・Gist ID の永続化 (localStorage + IndexedDB 二重保存) ---
+// --- トークン・Gist ID の永続化 ---
+// Gist IDの唯一の永続ソース = URLハッシュ (#gist=xxx)
+// トークンは localStorage + IndexedDB（URLには含めない）
 function getGhToken(){return loadSettings().ghToken||''}
 function getGistId(){return loadSettings().gistId||''}
+function _getGistIdFromHash(){
+  const m=location.hash.match(/[#&]gist=([a-f0-9]+)/);
+  return m?m[1]:'';
+}
+function _setGistIdToHash(id){
+  if(!id)return;
+  if(location.hash.match(/[#&]gist=/)){
+    location.hash=location.hash.replace(/gist=[a-f0-9]*/,'gist='+id);
+  }else{
+    location.hash=(location.hash||'#')+(location.hash.length>1?'&':'')+'gist='+id;
+  }
+}
 function setGhToken(t){
   const s=loadSettings();s.ghToken=t;saveSettings(s);
   _idbSave(GH_TOKEN_IDB_KEY,t).catch(()=>{});
@@ -3965,23 +3954,28 @@ function setGhToken(t){
 function setGistId(id){
   const s=loadSettings();s.gistId=id;saveSettings(s);
   _idbSave(GIST_ID_IDB_KEY,id).catch(()=>{});
+  _setGistIdToHash(id);
 }
 async function restoreGhToken(){
-  // 1. IndexedDB
+  // 1. localStorage
+  const ls=getGhToken();if(ls)return ls;
+  // 2. IndexedDB
   try{const t=await _idbLoad(GH_TOKEN_IDB_KEY);if(t){const s=loadSettings();s.ghToken=t;saveSettings(s);return t}}catch{}
-  // 2. localStorage
-  const ls=getGhToken();if(ls){_idbSave(GH_TOKEN_IDB_KEY,ls).catch(()=>{});return ls}
-  // 3. data/settings.json（キャッシュ削除後の復元用）
-  try{const f=await _loadSettingsFile();if(f?.ghToken){const s=loadSettings();s.ghToken=f.ghToken;saveSettings(s);_idbSave(GH_TOKEN_IDB_KEY,f.ghToken).catch(()=>{});return f.ghToken}}catch{}
   return '';
 }
 async function restoreGistId(){
-  // 1. IndexedDB
-  try{const id=await _idbLoad(GIST_ID_IDB_KEY);if(id){const s=loadSettings();s.gistId=id;saveSettings(s);return id}}catch{}
+  // 1. URLハッシュ（全キャッシュ削除後も残る唯一のソース）
+  const fromHash=_getGistIdFromHash();
+  if(fromHash){
+    const s=loadSettings();if(s.gistId!==fromHash){s.gistId=fromHash;saveSettings(s)}
+    _idbSave(GIST_ID_IDB_KEY,fromHash).catch(()=>{});
+    return fromHash;
+  }
   // 2. localStorage
-  const ls=getGistId();if(ls){_idbSave(GIST_ID_IDB_KEY,ls).catch(()=>{});return ls}
-  // 3. data/settings.json（キャッシュ削除後の復元用）
-  try{const f=await _loadSettingsFile();if(f?.gistId){const s=loadSettings();s.gistId=f.gistId;saveSettings(s);_idbSave(GIST_ID_IDB_KEY,f.gistId).catch(()=>{});return f.gistId}}catch{}
+  const ls=getGistId();
+  if(ls){_setGistIdToHash(ls);_idbSave(GIST_ID_IDB_KEY,ls).catch(()=>{});return ls}
+  // 3. IndexedDB
+  try{const id=await _idbLoad(GIST_ID_IDB_KEY);if(id){const s=loadSettings();s.gistId=id;saveSettings(s);_setGistIdToHash(id);return id}}catch{}
   return '';
 }
 function getLastSync(){return loadSettings().lastSync||''}
@@ -4096,8 +4090,8 @@ async function doFirstSetup(){
     if(!gist)throw new Error('Gistが見つかりません。IDを確認してください。');
     setGhToken(token);setGistId(gistId);
     const restored=await autoRestoreFromGithub();
-    if(st)st.innerHTML='<div class="sync-status sync-ok">✅ 設定完了！以降は自動で同期されます。'+(restored?'データを復元しました（'+RACES.length+'レース）':'')+'</div>';
-    setTimeout(()=>renderSyncView(),2000);
+    if(st)st.innerHTML='<div class="sync-status sync-ok">✅ 設定完了！以降は自動で同期されます。'+(restored?'データを復元しました（'+RACES.length+'レース）':'')+'<br><br><b style="color:var(--red)">このURLをブックマークしてください：</b><br><code style="font-size:11px;word-break:break-all">'+location.href+'</code><br><span style="font-size:11px">キャッシュを全削除してもこのURLからデータを復元できます。</span></div>';
+    setTimeout(()=>renderSyncView(),3000);
   }catch(e){if(st)st.innerHTML='<div class="sync-status sync-err">❌ '+e.message+'</div>'}
 }
 
@@ -4115,7 +4109,7 @@ function renderSyncView(){
     <h3 class="r">⚙️ 初回設定（一度だけ）</h3>
     <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
     トークンとGist IDを入力して「保存して同期開始」を押してください。<br>
-    <b>一度保存すればキャッシュを削除しても自動で復元されます。</b>
+    <b>設定後、URLにGist IDが埋め込まれます。そのURLをブックマークすればキャッシュ全削除後も復元できます。</b>
     </div>
     <label style="font-size:13px;font-weight:700">GitHubトークン（gistスコープ）</label>
     <input type="password" class="sync-url" id="setupToken" placeholder="ghp_..." style="margin:6px 0 10px">
@@ -4136,7 +4130,7 @@ function renderSyncView(){
 <h3 class="b">☁️ Gistクラウド同期</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
 レースデータ・馬DBをGitHub Gist（シークレット）にバックアップします。<br>
-ブラウザのキャッシュを削除してもデータを復元できます。
+${gistConnected?'<b style="color:var(--grn)">復元用URL:</b> <code style="font-size:10px;word-break:break-all;user-select:all">'+location.href+'</code><br><span style="font-size:11px">↑ このURLをブックマークすれば、キャッシュを全削除してもデータを復元できます。</span>':'設定後にGist IDがURLに埋め込まれます。そのURLをブックマークしてください。'}
 </div>
 <div style="margin-bottom:8px"><b style="font-size:13px">GitHub Personal Access Token:</b></div>
 <input type="password" class="sync-url" id="ghTokenInput" value="${token}" placeholder="ghp_xxxxx（gistスコープ必須）">
@@ -4294,7 +4288,7 @@ async function doGistCreate(){
     setGistId(gist.id);
     const now=new Date().toLocaleString('ja-JP');
     setLastSync(now);
-    showSyncStatus(`✅ Gist作成完了！<br>Gist ID: <code style="font-size:11px;user-select:all">${gist.id}</code><br><a href="${gist.html_url}" target="_blank" style="color:var(--blu);font-size:12px">Gistを開く</a>`,'ok');
+    showSyncStatus(`✅ Gist作成完了！<br>Gist ID: <code style="font-size:11px;user-select:all">${gist.id}</code><br><a href="${gist.html_url}" target="_blank" style="color:var(--blu);font-size:12px">Gistを開く</a><br><br><b style="color:var(--red)">このURLをブックマーク →</b> <code style="font-size:10px;word-break:break-all">${location.href}</code>`,'ok');
     renderSyncView();
   }catch(e){
     showSyncStatus('❌ エラー: '+e.message,'err');
@@ -4383,18 +4377,16 @@ async function doGhLoad(){
 
 // Init
 (async()=>{
-  // 0. settings.json からの設定復元（キャッシュ削除後の復元用）
-  try{
-    const fileSett=await _loadSettingsFile();
-    if(fileSett&&typeof fileSett==='object'){
-      const curr=loadSettings();
-      // localStorageが空またはgistIdがない場合、settings.jsonから復元
-      if(!curr.gistId&&fileSett.gistId){curr.gistId=fileSett.gistId;console.log('settings.jsonからGist ID復元:',fileSett.gistId)}
-      if(!curr.ghToken&&fileSett.ghToken){curr.ghToken=fileSett.ghToken;console.log('settings.jsonからGHトークン復元')}
-      if(!curr.dailyBudget&&fileSett.dailyBudget)curr.dailyBudget=fileSett.dailyBudget;
+  // 0. URLハッシュからGist IDを復元（全キャッシュ削除後も残る唯一のソース）
+  const hashGistId=_getGistIdFromHash();
+  if(hashGistId){
+    const curr=loadSettings();
+    if(!curr.gistId||curr.gistId!==hashGistId){
+      curr.gistId=hashGistId;
       try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(curr))}catch{}
+      console.log('URLハッシュからGist ID復元:',hashGistId);
     }
-  }catch(e){console.warn('settings.json復元スキップ:',e)}
+  }
 
   // 1. IndexedDBからデータ復元（localStorage→IDB初回マイグレーション含む）
   const idbRestored=await _loadFromIdb();
