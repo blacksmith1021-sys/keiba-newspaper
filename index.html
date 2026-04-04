@@ -210,6 +210,21 @@ const APP_VERSION='2.8.0';
 const DATA_SCHEMA_VERSION=1;
 let _mainDb=null;
 
+// マイグレーション定義（将来のスキーマ変更に対応）
+const MIGRATIONS={
+  // version 1→2 の例:
+  // 2: async(db)=>{ /* 新フィールド追加等 */ }
+};
+async function runMigrations(fromVer,toVer){
+  for(let v=fromVer+1;v<=toVer;v++){
+    if(MIGRATIONS[v]){
+      console.log('マイグレーション実行: v'+v);
+      try{const db=await _mainDbOpen();await MIGRATIONS[v](db)}catch(e){console.error('マイグレーション失敗: v'+v,e)}
+    }
+  }
+  await _dbPut('meta','schemaVersion',{version:toVer,date:new Date().toISOString()});
+}
+
 function _mainDbOpen(){
   if(_mainDb)return Promise.resolve(_mainDb);
   return new Promise((ok,ng)=>{
@@ -289,8 +304,19 @@ async function _loadFromIdb(){
       await _dbPut('horsedb','all',HORSE_STORE);
       await _dbPut('settings','all',loadSettings());
       await _dbPut('meta','migrationDone',{done:true,date:new Date().toISOString(),raceCount:RACES.length});
+      await _dbPut('meta','schemaVersion',{version:DATA_SCHEMA_VERSION,date:new Date().toISOString()});
       console.log('localStorage→IndexedDB初回マイグレーション完了');
+    }else{
+      // スキーマバージョンチェック＆マイグレーション
+      const sv=await _dbGet('meta','schemaVersion');
+      const currentVer=sv?.version||1;
+      if(currentVer<DATA_SCHEMA_VERSION){
+        await runMigrations(currentVer,DATA_SCHEMA_VERSION);
+        console.log('スキーママイグレーション完了: v'+currentVer+'→v'+DATA_SCHEMA_VERSION);
+      }
     }
+    // アプリバージョンを記録
+    await _dbPut('meta','appVersion',{version:APP_VERSION,date:new Date().toISOString()});
     return restored;
   }catch(e){console.warn('IDB load error:',e);return false}
 }
