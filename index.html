@@ -1787,10 +1787,10 @@ function analyzeLoss(rd,top3){
   const fukNum=bt?.fukushoHorse?.num;
   const fukHit=fukNum&&t3.includes(fukNum);
   
-  if(inTop3.length>=2)return['的中'];
-  
+  // 買い目の2頭が両方3着以内 → 外れた原因の分析は不要
+  if(inTop3.length>=2)return[];
+
   const reasons=[];
-  if(fukHit)reasons.push('複勝的中');
   
   if(inTop3.length===1){
     const missN=betNums.find(n=>!t3.includes(n));
@@ -3380,10 +3380,13 @@ function renderDetail(id){
     if(ret>0)h+=` <span style="font-size:13px;font-weight:500">回収：${ret.toLocaleString()}円 ／ 投資：${inv}円（${d>=0?'+'+d:d}円）</span>`;
     else h+=` <span style="font-size:13px;font-weight:500">投資：${inv}円（${d}円）</span>`;
     h+=`</div>`;
-    if(!hi.wideHit&&!hi.wideTicketHit&&r.result.reasons?.length>0){
-      h+=`<div class="reasons"><h4>🔍 外れた原因</h4>`;
-      r.result.reasons.filter(x=>!x.includes('複勝的中')).forEach(x=>{h+=`<div style="font-size:13px;line-height:1.7;padding:2px 0">・${x}</div>`});
-      h+=`</div>`;
+    if(!hi.anyHit&&r.result.reasons?.length>0){
+      const missReasons=r.result.reasons.filter(x=>!x.includes('的中'));
+      if(missReasons.length>0){
+        h+=`<div class="reasons"><h4>🔍 外れた原因</h4>`;
+        missReasons.forEach(x=>{h+=`<div style="font-size:13px;line-height:1.7;padding:2px 0">・${x}</div>`});
+        h+=`</div>`;
+      }
     } else if(hi.wideHit&&!hi.wideTicketHit){
       // 馬連的中だがワイド外れの場合（B─Cが3着以内に入らなかった）
     }
