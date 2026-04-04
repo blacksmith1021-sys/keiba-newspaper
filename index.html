@@ -104,7 +104,10 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
+<div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:2px">
 <div class="hd-ver" id="verStr">ver 2.8.0</div>
+<div id="syncBadge" style="font-size:9px;color:var(--lt)"></div>
+</div>
 <script>(function(){var el=document.getElementById('verStr');if(el)el.textContent='ver 2.8.0 (更新: 2026-04-04)'})();</script>
 </header>
 <nav class="nav" id="navBar">
@@ -369,6 +372,17 @@ function saveSettings(s){
 
 // --- 保存ステータス表示 ---
 let _saveStatusTimer=null;
+function updateSyncBadge(){
+  const el=document.getElementById('syncBadge');if(!el)return;
+  const ls=loadSettings().lastSync;const lb=loadSettings().lastJsonBackup;
+  const gistOk=!!(getGhToken&&getGhToken()&&getGistId&&getGistId());
+  let icon='',text='';
+  if(gistOk&&ls){icon='☁️';text='同期: '+ls}
+  else if(lb){icon='💾';text='バックアップ: '+lb}
+  else{icon='⚠️';text='未バックアップ'}
+  el.innerHTML=`<span>${icon}</span> <span style="color:${gistOk?'var(--grn)':lb?'var(--gld)':'var(--red)'}">${text}</span>`;
+}
+
 function showSaveStatus(msg,type){
   let el=document.getElementById('saveStatus');
   if(!el){
@@ -3630,7 +3644,7 @@ async function scheduleGistSync(){
     try{
       await gistUpdate(gistId,token);
       setLastSync(new Date().toLocaleString('ja-JP'));
-      showSaveStatus('☁️ Gist同期完了','ok');
+      showSaveStatus('☁️ Gist同期完了','ok');updateSyncBadge();
     }catch(e){
       console.warn('Gist自動同期失敗:',e.message);
     }
@@ -4014,6 +4028,7 @@ async function doGhLoad(){
     }
   });
   updateCountBadge();
+  updateSyncBadge();
   showView('input');
   // Service Worker 登録
   if('serviceWorker'in navigator){
