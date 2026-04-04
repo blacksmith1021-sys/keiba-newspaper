@@ -2663,60 +2663,66 @@ function renderDetail(id){
     </div>`;
   } else {
   // ===== 推奨馬券パネル =====
-  const bt=b;
   const _marks=['◎','○','▲','△','×'];
   const _markColors=['var(--red)','var(--blu)','var(--grn)','var(--gld)','var(--dim)'];
-  function _calcJkRate(jkName){
-    let total=0,w3=0;
-    RACES.forEach(r=>{
-      const top3=r.result?.top3?.map(n=>+n)||[];
-      (r.scored||[]).forEach(h=>{if((h.jk||'')!==jkName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
-      (r.result?.allResults||[]).forEach(ar=>{const h=r.scored?.find(x=>x.num===ar.num);if((ar.jockey||h?.jk||'')!==jkName)return;total++;if(ar.rank<=3)w3++});
-    });
-    return total>=3?{rate:Math.round(w3/total*100),total}:null;
-  }
-  function _calcTrRate(trName){
-    let total=0,w3=0;
-    RACES.forEach(r=>{
-      const top3=r.result?.top3?.map(n=>+n)||[];
-      (r.scored||[]).forEach(h=>{if((h.trainer||'')!==trName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
-    });
-    return total>=3?{rate:Math.round(w3/total*100),total}:null;
-  }
-  function _buildReasonText(horse){
-    const reasons=[];if(!horse)return '';
-    const l=horse.prev?.[0];
-    if(l){if(l.fin<=3)reasons.push('前走'+l.fin+'着/'+l.run+'頭');else if(l.gap!=null&&l.gap<=0.5)reasons.push('前走着差'+l.gap+'秒')}
-    if(horse.f?.['距離']?.c==='g')reasons.push('同距離');
-    if(horse.f?.['馬場']?.c==='g')reasons.push('馬場一致');
-    if(horse.f?.['競馬場']?.c==='g')reasons.push('同競馬場');
-    if(horse.f?.['トレンド']?.c==='g')reasons.push('着順上昇中');
-    if(horse.jk){const jr=_calcJkRate(horse.jk);if(jr&&jr.rate>=35)reasons.push(horse.jk+'騎手複勝率'+jr.rate+'%')}
-    if(horse.trainer){const tr=_calcTrRate(horse.trainer);if(tr&&tr.rate>=40)reasons.push(horse.trainer+'厩舎複勝率'+tr.rate+'%')}
-    return reasons.slice(0,3).join('・');
-  }
-  if(bt?.skipRecommended||bt?.totalInv===0){
-    h+=`<div style="background:var(--p3);border:3px solid var(--bdt);border-radius:8px;padding:16px 18px;margin-bottom:12px">
-      <div style="font-size:11px;font-weight:700;color:var(--lt);letter-spacing:2px;margin-bottom:4px">推奨馬券</div>
-      <div style="font-size:22px;font-weight:900;color:var(--dim)">見送り推奨</div>
-      <div style="font-size:13px;color:var(--dim);margin-top:6px">${bt?.patReason||'条件を満たす買い目なし'}</div>
-    </div>`;
-  }else if(bt?.tickets?.length>0){
-    const A=bt.best?.horses?.[0];
-    const reasonText=_buildReasonText(A);
-    const ticketTypes=[...new Set(bt.tickets.map(t=>t.type))];
-    const ticketDescs=bt.tickets.map(t=>t.desc).join('、');
-    h+=`<div style="background:rgba(45,106,48,.07);border:3px solid var(--grn);border-radius:8px;padding:16px 18px;margin-bottom:12px">
-      <div style="font-size:11px;font-weight:700;color:var(--grn);letter-spacing:2px;margin-bottom:6px">推奨馬券</div>
-      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-        <span style="font-size:16px;font-weight:700;color:var(--grn)">${ticketTypes.join('・')}</span>
-        <span style="font-family:'Shippori Mincho',serif;font-size:28px;font-weight:900;color:var(--ink);letter-spacing:4px">${ticketDescs}</span>
-        <span style="font-size:13px;color:var(--dim)">${bt.totalInv}円</span>
-      </div>
-      ${reasonText?`<div style="font-size:13px;color:var(--grn);font-weight:700">根拠：${reasonText}</div>`:''}
-      <div style="font-size:12px;color:var(--dim);margin-top:4px">${bt.patReason||''}</div>
-    </div>`;
-  }
+  (()=>{
+    const _calcJkRate=(jkName)=>{
+      let total=0,w3=0;
+      RACES.forEach(r=>{
+        const top3=r.result?.top3?.map(n=>+n)||[];
+        (r.scored||[]).forEach(h=>{if((h.jk||'')!==jkName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
+        (r.result?.allResults||[]).forEach(ar=>{const sc=r.scored?.find(x=>x.num===ar.num);if((ar.jockey||sc?.jk||'')!==jkName)return;total++;if(ar.rank<=3)w3++});
+      });
+      return total>=3?{rate:Math.round(w3/total*100),total}:null;
+    };
+    const _calcTrRate=(trName)=>{
+      let total=0,w3=0;
+      RACES.forEach(r=>{
+        const top3=r.result?.top3?.map(n=>+n)||[];
+        (r.scored||[]).forEach(h=>{if((h.trainer||'')!==trName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
+      });
+      return total>=3?{rate:Math.round(w3/total*100),total}:null;
+    };
+    const _buildReason=(horse)=>{
+      if(!horse)return '';
+      const reasons=[];
+      const l=horse.prev?.[0];
+      if(l&&l.fin<=3)reasons.push('前走'+l.fin+'着/'+l.run+'頭');
+      else if(l?.gap!=null&&l.gap<=0.5)reasons.push('着差'+l.gap+'秒');
+      if(horse.f?.['距離']?.c==='g')reasons.push('同距離');
+      if(horse.f?.['馬場']?.c==='g')reasons.push('馬場一致');
+      if(horse.f?.['競馬場']?.c==='g')reasons.push('同競馬場');
+      if(horse.f?.['トレンド']?.c==='g')reasons.push('着順上昇中');
+      if(horse.jk){const jr=_calcJkRate(horse.jk);if(jr&&jr.rate>=33)reasons.push(horse.jk+'複勝率'+jr.rate+'%')}
+      if(horse.trainer){const tr=_calcTrRate(horse.trainer);if(tr&&tr.rate>=40)reasons.push(horse.trainer+'厩舎'+tr.rate+'%')}
+      return reasons.slice(0,4).join('・');
+    };
+    const A=s?.[0];
+    const reasonText=_buildReason(A);
+    if(!b||b.skipRecommended||b.totalInv===0){
+      h+=`<div style="background:var(--p3);border:3px solid var(--bdt);border-radius:8px;padding:14px 18px;margin-bottom:12px;text-align:center">
+        <div style="font-size:10px;font-weight:700;color:var(--lt);letter-spacing:3px;margin-bottom:4px">推奨馬券</div>
+        <div style="font-size:24px;font-weight:900;color:var(--dim)">このレースは買い目なし</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:6px">${b?.patReason||'条件を満たす買い目がありません'}</div>
+      </div>`;
+    }else if(b?.tickets?.length>0){
+      const A2=b.best?.horses?.[0];
+      const B2=b.best?.horses?.[1];
+      const types=[...new Set(b.tickets.map(t=>t.type))].join('・');
+      const descs=b.tickets.map(t=>{const nums=t.horses?.map(h2=>h2.num)||[];return nums.join('─')}).join('、');
+      h+=`<div style="background:rgba(45,106,48,.08);border:3px solid var(--grn);border-radius:8px;padding:14px 18px;margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;color:var(--grn);letter-spacing:3px;margin-bottom:6px">推奨馬券</div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:18px;font-weight:900;color:var(--grn)">${types}</span>
+          <span style="font-family:'Shippori Mincho',serif;font-size:32px;font-weight:900;color:var(--ink);letter-spacing:6px">${descs}</span>
+          <span style="font-size:13px;color:var(--dim)">${b.totalInv}円</span>
+        </div>
+        ${reasonText?`<div style="font-size:13px;color:var(--grn);font-weight:700;margin-bottom:4px">根拠：${reasonText}</div>`:''}
+        <div style="font-size:11px;color:var(--dim)">${b.patName||''}</div>
+      </div>`;
+    }
+  })();
+  // ===== 推奨馬券パネルここまで =====
 
   // 馬場・コースデータ欠損チェック
   if(!r.info.surf||!r.info.cond||!r.info.type){
