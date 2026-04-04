@@ -125,6 +125,27 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <div id="vSync" class="hidden"></div>
 </div>
 <script>
+// ===== 人気→推定オッズ変���テーブル（12,376レコードの統計に基づく）=====
+const POP_TO_ODDS={1:2.8,2:5.0,3:7.5,4:11.0,5:16.0,6:22.0,7:32.0,8:45.0,9:60.0,10:80.0,11:110.0,12:150.0};
+// 人気または実オッズから推定オッズを返す
+function estimateOdds(horse){
+  if(horse.odds&&horse.odds>0)return horse.odds;
+  if(horse._resultOdds&&horse._resultOdds>0)return horse._resultOdds;
+  const pop=horse.pop||horse._resultPopularity;
+  if(pop&&POP_TO_ODDS[pop])return POP_TO_ODDS[pop];
+  return 0;
+}
+// 人気→推定3着以内確率���12,376レコード統計）
+const POP_TO_W3PROB={1:0.685,2:0.529,3:0.434,4:0.341,5:0.259,6:0.213,7:0.146,8:0.113,9:0.093,10:0.075,11:0.048,12:0.042};
+function estimateW3Prob(horse){
+  const pop=horse.pop||horse._resultPopularity;
+  if(pop&&POP_TO_W3PROB[pop])return POP_TO_W3PROB[pop];
+  // オッズから逆算（簡易）
+  const odds=estimateOdds(horse);
+  if(odds>0)return Math.min(0.85,1/odds*0.85);
+  return 0.15; // デフォルト
+}
+
 // ===== STORAGE (File System Access API + localStorage fallback) =====
 const SK='keiba-races-v2';
 const HK='keiba-horsedb-v1';
@@ -1072,10 +1093,16 @@ function genBet(scored,raceInfo,marketOdds){
   if(headCount<=6){raceQuality.score-=30;raceQuality.reasons.push('少頭数（'+headCount+'頭）')}
   else if(headCount<=8){raceQuality.score-=15;raceQuality.reasons.push('小頭数（'+headCount+'頭）')}
 
-  // 断然1番人気（単勝2倍未満）：的中しても配当が低い（オッズデータがある場合のみ）
-  const favHorse=scored.slice().sort((a,b)=>(a.odds||999)-(b.odds||999))[0];
-  const favOdds=favHorse?.odds||99;
-  const hasOddsData=scored.some(h=>h.odds&&h.odds>0);
+  // 各馬に推定オッズ・期待値を付与
+  scored.forEach(h=>{
+    h._estOdds=estimateOdds(h);
+    h._estW3Prob=estimateW3Prob(h);
+    h._ev=h._estOdds>0&&h._estW3Prob>0?Math.round(h._estW3Prob*h._estOdds*100)/100:0;
+  });
+  // 断然1番人気（単勝2倍未満）：的中しても配当が低い
+  const favHorse=scored.slice().sort((a,b)=>(a._estOdds||999)-(b._estOdds||999))[0];
+  const favOdds=favHorse?._estOdds||99;
+  const hasOddsData=scored.some(h=>h._estOdds&&h._estOdds>0);
   if(hasOddsData){
     if(favOdds<1.5){raceQuality.score-=40;raceQuality.reasons.push('断然人気('+favOdds+'倍)')}
     else if(favOdds<2.0){raceQuality.score-=25;raceQuality.reasons.push('強い1番人気('+favOdds+'倍)')}
@@ -1438,15 +1465,34 @@ function parseResult(text,horses){
   let payout=0;
   if(payouts['ワイド']?.length>0)payout=payouts['ワイド'][0].amount;
   
+  // 単勝オッズを払戻金から各馬に付与
+  // 単勝払戻: combo=馬番, amount=払戻金 → オッズ = amount / 100
+  const tanshoMap={};
+  if(payouts['単勝']){
+    payouts['単勝'].forEach(p=>{
+      const num=parseInt(p.combo);
+      if(num>=1&&num<=18)tanshoMap[num]=p.amount/100;
+    });
+  }
+  // 人気順を単勝オッズから推定（低い順=1番人気）
+  const oddsEntries=Object.entries(tanshoMap).sort((a,b)=>a[1]-b[1]);
+  const popFromOdds={};
+  oddsEntries.forEach(([num,odds],i)=>{popFromOdds[+num]=i+1});
+
+  results.forEach(r=>{
+    if(tanshoMap[r.num])r.odds=tanshoMap[r.num];
+    if(popFromOdds[r.num]&&!r.popularity)r.popularity=popFromOdds[r.num];
+  });
+
   // 重複排除＆着順ソート
   const seen=new Set();const unique=[];
   results.sort((a,b)=>a.rank-b.rank);
   for(const r of results){if(!seen.has(r.num)){seen.add(r.num);unique.push(r)}}
   const top3=unique.slice(0,3).map(r=>r.num);
-  
+
   return{
     top3,payout,
-    allResults:unique,     // 全馬の詳細着順データ
+    allResults:unique,     // 全馬の詳細着順データ（odds, popularity付き）
     harlonTime,            // ハロンタイム
     racePace,              // ペース（上り4F/3F）
     corners,               // コーナー通過順位
@@ -2993,8 +3039,14 @@ function renderDetail(id){
       const B2=b.best?.horses?.[1];
       const types=[...new Set(b.tickets.map(t=>t.type))].join('・');
       const descs=b.tickets.map(t=>{const nums=t.horses?.map(h2=>h2.num)||[];return nums.join('─')}).join('、');
+      const axisEv=A2?._ev||0;
+      const evColor=axisEv>=1.2?'var(--grn)':axisEv>=0.8?'var(--gld)':'var(--red)';
+      const evLabel=axisEv>=1.2?'🟢 期待値高':axisEv>=0.8?'🟡 標��':'🔴 期待値低';
       h+=`<div style="background:rgba(45,106,48,.08);border:3px solid var(--grn);border-radius:8px;padding:14px 18px;margin-bottom:12px">
-        <div style="font-size:10px;font-weight:700;color:var(--grn);letter-spacing:3px;margin-bottom:6px">推奨馬券</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:10px;font-weight:700;color:var(--grn);letter-spacing:3px">推奨馬券</span>
+          ${axisEv>0?`<span style="font-size:12px;font-weight:700;color:${evColor}">${evLabel}（EV ${axisEv.toFixed(2)}）</span>`:''}
+        </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
           <span style="font-size:18px;font-weight:900;color:var(--grn)">${types}</span>
           <span style="font-family:'Shippori Mincho',serif;font-size:32px;font-weight:900;color:var(--ink);letter-spacing:6px">${descs}</span>
@@ -3287,6 +3339,20 @@ function doSaveResult(id){
     corners:pr.corners,
     payouts:pr.payouts
   };
+  // allResultsのオッズ・人気・着順をscoredに反映
+  if(pr.allResults&&r.scored){
+    pr.allResults.forEach(ar=>{
+      const h=r.scored.find(x=>x.num===ar.num);
+      if(!h)return;
+      h._resultRank=ar.rank;
+      if(ar.odds)h._resultOdds=ar.odds;
+      if(ar.popularity)h._resultPopularity=ar.popularity;
+      if(ar.last3f)h._resultLast3f=ar.last3f;
+      // オッズが未入力だった馬に結果のオッズを補完
+      if(!h.odds&&ar.odds)h.odds=ar.odds;
+      if(!h.pop&&ar.popularity)h.pop=ar.popularity;
+    });
+  }
   // 検証用スナップショット（フェーズ2でのファクター検証に使用）
   try{r.result.analysisSnapshot=buildAnalysisSnapshot(r)}catch(e){console.warn('snapshot生成失敗:',e)}
   saveR(RACES);
