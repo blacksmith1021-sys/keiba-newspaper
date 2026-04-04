@@ -104,7 +104,8 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <header class="hd">
 <div class="hd-date" id="dateStr"></div>
 <h1>競馬ファクター新聞</h1>
-<div class="hd-ver">ver 2.7.0 (2026-04-03)</div>
+<div class="hd-ver" id="verStr">ver 2.7.0</div>
+<script>(function(){var el=document.getElementById('verStr');if(el)el.textContent='ver 2.7.0 (更新: 2026-04-04 11:31)'})();</script>
 </header>
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">＋ 入力</button>
@@ -818,6 +819,7 @@ function getHorseStatBonus(horse,raceInfo){
   return{bonus,reasons};
 }
 
+// デバッグ: ブラウザコンソールで genBet(RACES[0].scored, RACES[0].info) を実行して確認可能
 function genBet(scored,raceInfo,marketOdds){
   const marks=['◎','○','▲','△','×'];
   const eU=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.4*100)/100};
@@ -927,18 +929,17 @@ function genBet(scored,raceInfo,marketOdds){
   const allPop4Plus=hasPop&&top3.every(h=>h.pop&&h.pop>=4);
 
   // 3パターン判定（人気データがない場合はスコア差のみで判定）
-  const isAxisClear=A&&A.ns>=85&&(A.pop?A.pop<=2:true)&&nsDiff>=10;
-  const isMixedRace=top3diff<=5&&(hasPop?allPop4Plus:true);
-  const isStandard=!isAxisClear&&!isMixedRace&&A&&A.ns>=80&&(A.pop?A.pop<=3:true);
+  const isAxisClear=A&&A.ns>=80&&nsDiff>=8;
+  const isMixedRace=top3diff<=8;
+  const isStandard=!isAxisClear&&!isMixedRace&&A&&A.ns>=50;
 
   // 見送り判定
   let budgetOver=false;
   if(typeof getDailyBudget==='function'&&typeof getTodayInvested==='function'){
     if(getDailyBudget()-getTodayInvested()<100)budgetOver=true;
   }
-  let skipRecommended=topNs<70||budgetOver;
-  if(!isAxisClear&&!isMixedRace&&!isStandard)skipRecommended=true;
-  if(!isMixedRace&&A&&A.pop&&A.pop>=4&&hasOddsData)skipRecommended=true;
+  let skipRecommended=topNs<50||budgetOver;
+  if(!A||!B)skipRecommended=true;
 
   // 信頼度
   const axisG=A?countG(A):0;
@@ -2638,9 +2639,9 @@ function renderDetail(id){
   try{
   const r=RACES.find(x=>x.id===id);if(!r)return;
   const s=r.scored;let b=r.bet;const hasR=r.result?.top3?.length>=3;
-  // bet が未定義の場合は genBet を再実行して修復
-  if(!b&&s?.length>0){
-    try{b=genBet(s,r.info);r.bet=b;saveR(RACES)}catch(e){console.warn('bet再生成失敗:',e.message)}
+  // bet が未定義または不正な場合は genBet を再実行して修復
+  if((!b||b.totalInv===undefined)&&s?.length>0){
+    try{b=genBet(s,r.info);r.bet=b}catch(e){console.warn('bet再生成失敗:',e.message)}
   }
   const hi=hasR?getHitInfo(r):{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0};
   const isHit=hi.wideHit;
