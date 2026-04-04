@@ -1608,7 +1608,7 @@ function parseResult(text,horses){
     const re=new RegExp(pt+'\\s*\\n([\\s\\S]*?)(?='+payTypes.filter(x=>x!==pt).join('|')+'|$)');
     const pm=text.match(re);
     if(pm){
-      const allPay=[...pm[1].matchAll(/(\d[\d\-]+)\s+(\d[\d,]+)円/g)];
+      const allPay=[...pm[1].matchAll(/(\d[\d\-ー－―]+)\s+(\d[\d,]+)円/g)];
       payouts[pt]=allPay.map(m=>({combo:m[1],amount:parseInt(m[2].replace(/,/g,''))}));
     }
   });
@@ -1659,7 +1659,8 @@ function findPayout(payouts,type,nums){
   const ordered=(type==='馬単'||type==='3連単');
   const key=ordered?nums.join('-'):nums.slice().sort((a,b)=>a-b).join('-');
   const found=payouts[type].find(p=>{
-    const parts=p.combo.split('-').map(Number);
+    // ハイフン・全角ダッシュ・全角マイナスなど各種区切り文字に対応
+    const parts=p.combo.replace(/[ー－―\u2010-\u2015\u2212\uFF0D]/g,'-').split('-').map(Number).filter(n=>!isNaN(n));
     const pk=ordered?parts.join('-'):parts.sort((a,b)=>a-b).join('-');
     return pk===key;
   });
@@ -1739,7 +1740,18 @@ function getHitInfo(r){
       }
       if(hit){
         const sortedNums=tk.type==='馬単'||tk.type==='3連単'?nums:[...nums].sort((a,b)=>a-b);
-        const pay=findPayout(pays,tk.type,sortedNums)||0;
+        let pay=findPayout(pays,tk.type,sortedNums)||0;
+        // 払戻金が取得できない場合、手入力の払戻額またはcheckAllTicketsの結果をフォールバック
+        if(pay===0){
+          const allTk=checkAllTickets(r);
+          if(allTk){
+            // 券種名でcheckAllTicketsの結果を参照
+            const tkKey=tk.type==='単勝'?'単勝':tk.type==='馬連'?'馬連':tk.type==='ワイド'?'ワイド':tk.type==='馬単'?'馬単':tk.type==='3連複'?'3連複':tk.type==='3連単'?'3連単':null;
+            if(tkKey&&allTk[tkKey]?.hit&&allTk[tkKey]?.pay>0)pay=allTk[tkKey].pay;
+          }
+          // それでも0なら手入力の払戻額を使用
+          if(pay===0&&res.payout>0)pay=res.payout;
+        }
         ret+=pay*(tk.amount/100);
         hitTickets.push({type:tk.type,desc:tk.desc,pay,amount:tk.amount});
       }
