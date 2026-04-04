@@ -179,7 +179,7 @@ async function restoreFolder(){
   }catch{return false}
 }
 
-// --- IndexedDB (ハンドル永続化用) ---
+// --- IndexedDB (ハンドル永続化用: keiba-fs) ---
 function _idbOpen(){
   return new Promise((ok,ng)=>{
     const req=indexedDB.open('keiba-fs',1);
@@ -203,6 +203,96 @@ async function _idbLoad(k){
     const req=tx.objectStore('kv').get(k);
     req.onsuccess=()=>ok(req.result);req.onerror=()=>ng(req.error);
   });
+}
+
+// --- IndexedDB メインデータストア (keiba-newspaper) ---
+const APP_VERSION='2.8.0';
+const DATA_SCHEMA_VERSION=1;
+let _mainDb=null;
+
+function _mainDbOpen(){
+  if(_mainDb)return Promise.resolve(_mainDb);
+  return new Promise((ok,ng)=>{
+    const req=indexedDB.open('keiba-newspaper',DATA_SCHEMA_VERSION);
+    req.onupgradeneeded=(e)=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains('races'))db.createObjectStore('races');
+      if(!db.objectStoreNames.contains('horsedb'))db.createObjectStore('horsedb');
+      if(!db.objectStoreNames.contains('settings'))db.createObjectStore('settings');
+      if(!db.objectStoreNames.contains('meta'))db.createObjectStore('meta');
+    };
+    req.onsuccess=()=>{_mainDb=req.result;ok(_mainDb)};
+    req.onerror=()=>ng(req.error);
+  });
+}
+async function _dbPut(store,key,value){
+  try{
+    const db=await _mainDbOpen();
+    return new Promise((ok,ng)=>{
+      const tx=db.transaction(store,'readwrite');
+      tx.objectStore(store).put(value,key);
+      tx.oncomplete=()=>ok(true);tx.onerror=()=>{console.error('IDB put error:',tx.error);ok(false)};
+    });
+  }catch(e){console.error('IDB put error:',e);return false}
+}
+async function _dbGet(store,key){
+  try{
+    const db=await _mainDbOpen();
+    return new Promise((ok,ng)=>{
+      const tx=db.transaction(store,'readonly');
+      const req=tx.objectStore(store).get(key);
+      req.onsuccess=()=>ok(req.result);req.onerror=()=>{console.error('IDB get error:',req.error);ok(null)};
+    });
+  }catch(e){console.error('IDB get error:',e);return null}
+}
+
+// IndexedDBへの非同期バックグラウンド保存（デバウンス付き）
+let _dbSaveTimer=null;
+function _scheduleDbSave(){
+  if(_dbSaveTimer)clearTimeout(_dbSaveTimer);
+  _dbSaveTimer=setTimeout(async()=>{
+    try{
+      await _dbPut('races','all',RACES);
+      await _dbPut('horsedb','all',HORSE_STORE);
+      await _dbPut('settings','all',loadSettings());
+      await _dbPut('meta','lastSave',{date:new Date().toISOString(),raceCount:RACES.length,horseCount:Object.keys(HORSE_STORE).length});
+    }catch(e){console.warn('IDB background save error:',e)}
+  },500);
+}
+
+// 起動時: IndexedDBからデータを復元し、localStorageより件数が多ければ採用
+async function _loadFromIdb(){
+  try{
+    const idbRaces=await _dbGet('races','all');
+    const idbHorses=await _dbGet('horsedb','all');
+    const idbSettings=await _dbGet('settings','all');
+    let restored=false;
+    if(idbRaces&&Array.isArray(idbRaces)&&idbRaces.length>RACES.length){
+      RACES=idbRaces;
+      try{localStorage.setItem(SK,JSON.stringify(RACES))}catch{}
+      restored=true;
+      console.log('IndexedDBからレース復元:',RACES.length,'件');
+    }
+    if(idbHorses&&typeof idbHorses==='object'&&Object.keys(idbHorses).length>Object.keys(HORSE_STORE).length){
+      HORSE_STORE=idbHorses;
+      try{localStorage.setItem(HK,JSON.stringify(HORSE_STORE))}catch{}
+      restored=true;
+      console.log('IndexedDBから馬DB復元:',Object.keys(HORSE_STORE).length,'頭');
+    }
+    if(idbSettings&&typeof idbSettings==='object'){
+      try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(idbSettings))}catch{}
+    }
+    // localStorageのデータをIndexedDBにも保存（初回マイグレーション）
+    const meta=await _dbGet('meta','migrationDone');
+    if(!meta){
+      await _dbPut('races','all',RACES);
+      await _dbPut('horsedb','all',HORSE_STORE);
+      await _dbPut('settings','all',loadSettings());
+      await _dbPut('meta','migrationDone',{done:true,date:new Date().toISOString(),raceCount:RACES.length});
+      console.log('localStorage→IndexedDB初回マイグレーション完了');
+    }
+    return restored;
+  }catch(e){console.warn('IDB load error:',e);return false}
 }
 
 // --- 統合ストレージ (FS優先、localStorage併用) ---
@@ -232,13 +322,15 @@ function saveR(r){
   if(_dirHandle)_scheduleWrite('races.json',json);
   HORSE_DB=buildHorseDB();
   updateCountBadge();
+  _scheduleDbSave();
   scheduleGistSync().catch(()=>{});
 }
 function loadHorseStore(){try{return JSON.parse(localStorage.getItem(HK))||{}}catch{return{}}}
 function saveHorseStore(db){
   const json=JSON.stringify(db);
-  try{localStorage.setItem(HK,json)}catch(e){console.error('馬DB保存エラー:',e)}
+  try{localStorage.setItem(HK,json)}catch(e){console.error('馬DB保存��ラー:',e)}
   if(_dirHandle)_scheduleWrite('horse_store.json',json);
+  _scheduleDbSave();
   scheduleGistSync().catch(()=>{});
 }
 function loadSettings(){try{return JSON.parse(localStorage.getItem(SETTINGS_KEY))||{}}catch{return{}}}
@@ -246,6 +338,7 @@ function saveSettings(s){
   const json=JSON.stringify(s);
   try{localStorage.setItem(SETTINGS_KEY,json)}catch{}
   if(_dirHandle)_scheduleWrite('settings.json',json);
+  _scheduleDbSave();
 }
 
 // --- 保存ステータス表示 ---
@@ -3784,6 +3877,9 @@ async function doGhLoad(){
 // Init
 (async()=>{
   // 1. ファイルストレージ自動復元
+  // 0. IndexedDBからデータ復元（localStorage→IDB初回マイグレーション含む）
+  const idbRestored=await _loadFromIdb();
+  if(idbRestored){HORSE_DB=buildHorseDB();console.log('IndexedDBからデータ復元完了')}
   const fsOk=await initFileStorage();
   if(fsOk)console.log('ファイルストレージ接続済み');
   // 2. Gist自動復元（ローカルが空の場合のみ）
