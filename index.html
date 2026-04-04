@@ -146,6 +146,25 @@ function estimateW3Prob(horse){
   return 0.15; // デフォルト
 }
 
+// ===== 統計ユーティリティ =====
+const BAYES_PRIOR_K=40; // ベイズ推定の事前サンプルサイズ（調整可能）
+
+// ウィルソン信頼区間（95%）
+function wilsonCI(successes,total){
+  if(total===0)return{lo:0,hi:0};
+  const z=1.96,p=successes/total,n=total;
+  const denom=1+z*z/n;
+  const center=(p+z*z/(2*n))/denom;
+  const margin=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/denom;
+  return{lo:Math.max(0,center-margin),hi:Math.min(1,center+margin)};
+}
+// ベイズ推定（ベータ分布事前）
+function bayesEstimate(successes,total,priorMean){
+  const alpha=priorMean*BAYES_PRIOR_K;
+  const beta=(1-priorMean)*BAYES_PRIOR_K;
+  return(successes+alpha)/(total+alpha+beta);
+}
+
 // ===== STORAGE (File System Access API + localStorage fallback) =====
 const SK='keiba-races-v2';
 const HK='keiba-horsedb-v1';
@@ -3603,17 +3622,49 @@ function renderTrends(){
   const totalAccRaces=filteredRaces.length;
 
   // --- 騎手ごとの成績 ---
-  const jkEntries=Object.entries(accJockey).filter(([,v])=>v.total>=3).sort((a,b)=>(b[1].w3/b[1].total)-(a[1].w3/a[1].total));
+  const jkMinRuns=parseInt(document.getElementById('jkMinRuns')?.value)||3;
+  const jkShowStats=document.getElementById('jkShowStats')?.checked??false;
+  // 全騎手の��重平均（ベイズ事前分布用）
+  const allJkEntries=Object.entries(accJockey);
+  const jkTotalAll=allJkEntries.reduce((a,[,v])=>a+v.total,0);
+  const jkW1All=allJkEntries.reduce((a,[,v])=>a+v.w1,0);
+  const jkW3All=allJkEntries.reduce((a,[,v])=>a+v.w3,0);
+  const jkPriorW1=jkTotalAll>0?jkW1All/jkTotalAll:0.10;
+  const jkPriorW3=jkTotalAll>0?jkW3All/jkTotalAll:0.25;
+  // ベイズ補正後の複勝率でソート
+  const jkEntries=allJkEntries.filter(([,v])=>v.total>=jkMinRuns)
+    .map(([name,s])=>({name,s,bayesW3:bayesEstimate(s.w3,s.total,jkPriorW3),bayesW1:bayesEstimate(s.w1,s.total,jkPriorW1)}))
+    .sort((a,b)=>b.bayesW3-a.bayesW3);
   h+=`<div class="pnl"><h3 class="r">🏇 騎手ごとの成績</h3>`;
-  h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px">蓄積データ全体（${totalAccRaces}レース）から集計 ／ 3走以上の騎手のみ表示</div>`;
+  h+=`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <span style="font-size:11px;color:var(--dim)">蓄積データ（${totalAccRaces}R）</span>
+    <select id="jkMinRuns" onchange="renderTrends()" style="padding:4px 8px;font-size:12px;border:1px solid var(--bdr);border-radius:4px;background:var(--p2);font-family:'Noto Sans JP',sans-serif">
+      ${[3,10,20,30,50,100].map(n=>`<option value="${n}"${jkMinRuns===n?' selected':''}>${n}走以上</option>`).join('')}
+    </select>
+    <label style="font-size:11px;color:var(--dim);cursor:pointer"><input type="checkbox" id="jkShowStats" onchange="renderTrends()"${jkShowStats?' checked':''}> 信頼区間・補正値</label>
+  </div>`;
   if(jkEntries.length>0){
     h+=`<div style="overflow-x:auto"><table style="width:100%;font-size:13px;border-collapse:collapse">`;
-    h+=`<tr style="background:var(--ink);color:var(--p)"><th style="padding:6px 8px;text-align:left">騎手</th><th style="padding:6px 8px;text-align:right">出走</th><th style="padding:6px 8px;text-align:right">勝率</th><th style="padding:6px 8px;text-align:right">連対率</th><th style="padding:6px 8px;text-align:right">複勝率</th><th style="padding:6px 8px;text-align:right">掲示板率</th></tr>`;
-    jkEntries.slice(0,30).forEach(([name,s],i)=>{
+    h+=`<tr style="background:var(--ink);color:var(--p)"><th style="padding:6px 8px;text-align:left">騎手</th><th style="padding:6px 8px;text-align:right">出走</th><th style="padding:6px 8px;text-align:right">勝率</th><th style="padding:6px 8px;text-align:right">複勝率</th>${jkShowStats?'<th style="padding:6px 8px;text-align:right">95%CI</th><th style="padding:6px 8px;text-align:right">補正値</th>':''}<th style="padding:6px 8px;text-align:right">掲示板率</th></tr>`;
+    jkEntries.slice(0,40).forEach((e,i)=>{
+      const{name,s,bayesW3,bayesW1}=e;
       const bg=i%2===0?'var(--p)':'var(--p2)';
-      h+=`<tr style="background:${bg}"><td style="padding:4px 8px;font-weight:700">${name}</td><td style="padding:4px 8px;text-align:right">${s.total}</td><td style="padding:4px 8px;text-align:right;color:${s.w1/s.total>=.15?'var(--gld)':'var(--dim)'}">${Math.round(s.w1/s.total*100)}%</td><td style="padding:4px 8px;text-align:right">${Math.round(s.w2/s.total*100)}%</td><td style="padding:4px 8px;text-align:right;font-weight:700;color:${s.w3/s.total>=.3?'var(--grn)':'var(--dim)'}">${Math.round(s.w3/s.total*100)}%</td><td style="padding:4px 8px;text-align:right">${Math.round(s.w5/s.total*100)}%</td></tr>`;
+      const w1r=Math.round(s.w1/s.total*100);
+      const w3r=Math.round(s.w3/s.total*100);
+      const w5r=Math.round(s.w5/s.total*100);
+      const badge=s.total<30?'<span style="font-size:9px;background:var(--p3);border:1px solid var(--bdr);border-radius:3px;padding:0 4px;margin-left:4px;color:var(--lt)">少数</span>':'';
+      let ciCol='',bayesCol='';
+      if(jkShowStats){
+        const ci=wilsonCI(s.w3,s.total);
+        ciCol=`<td style="padding:4px 8px;text-align:right;font-size:11px;color:var(--lt)">[${Math.round(ci.lo*100)}-${Math.round(ci.hi*100)}%]</td>`;
+        const bv=Math.round(bayesW3*100);
+        const diff=bv-w3r;
+        bayesCol=`<td style="padding:4px 8px;text-align:right;font-size:12px;color:${diff>0?'var(--grn)':diff<0?'var(--red)':'var(--dim)'}">${bv}%</td>`;
+      }
+      h+=`<tr style="background:${bg}"><td style="padding:4px 8px;font-weight:700">${name}${badge}</td><td style="padding:4px 8px;text-align:right">${s.total}</td><td style="padding:4px 8px;text-align:right;color:${w1r>=15?'var(--gld)':'var(--dim)'}">${w1r}%</td><td style="padding:4px 8px;text-align:right;font-weight:700;color:${w3r>=30?'var(--grn)':'var(--dim)'}">${w3r}%</td>${ciCol}${bayesCol}<td style="padding:4px 8px;text-align:right">${w5r}%</td></tr>`;
     });
     h+=`</table></div>`;
+    if(jkShowStats)h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px;line-height:1.6">95%CI: ウィルソン信頼区間。補正値: ベイズ推定（K=${BAYES_PRIOR_K}）。出走数が少ない騎手ほど全体平均（${Math.round(jkPriorW3*100)}%）に近づきます。</div>`;
   }else{h+=`<div style="color:var(--dim);font-size:13px">データ不足</div>`}
   h+=`</div>`;
 
