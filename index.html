@@ -3734,6 +3734,20 @@ ${fsConnected?'<div style="margin-top:6px;font-size:11px;color:var(--lt)">保存
 </div>
 
 <div class="pnl">
+<h3 style="color:var(--gld)">💾 JSONバックアップ・復元</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
+全データ（レース・馬DB・設定）をJSONファイルにバックアップ・復元できます。<br>
+端末変更やブラウザデータ削除時の保険として、定期的にバックアップしてください。
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+<button class="btn btn-b" onclick="doJsonBackup()" style="background:var(--gld)">📥 JSONバックアップ保存</button>
+<button class="btn btn-s" onclick="doJsonRestore()">📤 JSONから復元</button>
+</div>
+<div id="jsonBackupStatus"></div>
+${(()=>{const ls=loadSettings().lastJsonBackup;return ls?'<div style="font-size:11px;color:var(--lt);margin-top:4px">最終バックアップ: '+ls+'</div>':'<div style="font-size:11px;color:var(--red);margin-top:4px">⚠️ バックアップ未実施</div>'})()}
+</div>
+
+<div class="pnl">
 <h3 style="color:var(--grn)">📂 検証CSV取込・復元</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
 検証データCSV（keiba_analysis_*.csv）を取り込んで、レースデータを復元します。<br>
@@ -3745,13 +3759,66 @@ ${fsConnected?'<div style="margin-top:6px;font-size:11px;color:var(--lt)">保存
 <div class="pnl">
 <h3>データ状況</h3>
 <div style="font-size:13px;line-height:1.8">
-ストレージ: <b>${fsConnected?'ファイル + localStorage':'localStorage のみ'}</b>
+ストレージ: <b>IndexedDB + localStorage${fsConnected?' + ファイル':''}</b>
 ${gistConnected?' / <span class="fs-badge fs-on">Gist連携 ON</span>':''}<br>
 レース数: <b>${RACES.filter(r=>!r.id?.startsWith('bulk_')&&!r.id?.startsWith('csv_')).length}</b> 件（予想）/ <b>${RACES.filter(r=>r.id?.startsWith('bulk_')).length}</b> 件（一括取込）/ <b>${RACES.filter(r=>r.id?.startsWith('csv_')).length}</b> 件（CSV取込）<br>
 馬DB: <b>${Object.keys(HORSE_STORE).length}</b> 頭
 </div>
 </div>`;
   document.getElementById('vSync').innerHTML=h;
+}
+
+function doJsonBackup(){
+  try{
+    const backup={
+      version:APP_VERSION,
+      schemaVersion:DATA_SCHEMA_VERSION,
+      exportedAt:new Date().toISOString(),
+      data:{
+        races:RACES,
+        horseStore:HORSE_STORE,
+        settings:loadSettings()
+      },
+      stats:{raceCount:RACES.length,horseCount:Object.keys(HORSE_STORE).length}
+    };
+    const json=JSON.stringify(backup);
+    const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const now=new Date();
+    const ts=now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0')+'_'+String(now.getHours()).padStart(2,'0')+String(now.getMinutes()).padStart(2,'0');
+    a.href=url;a.download='keiba_backup_'+ts+'.json';a.click();
+    URL.revokeObjectURL(url);
+    const s=loadSettings();s.lastJsonBackup=now.toLocaleString('ja-JP');saveSettings(s);
+    const el=document.getElementById('jsonBackupStatus');
+    if(el)el.innerHTML='<div class="sync-status sync-ok" style="margin-top:8px">✅ バックアップ保存完了（'+RACES.length+'レース, '+Object.keys(HORSE_STORE).length+'頭）</div>';
+  }catch(e){
+    const el=document.getElementById('jsonBackupStatus');
+    if(el)el.innerHTML='<div class="sync-status sync-err" style="margin-top:8px">❌ '+e.message+'</div>';
+  }
+}
+function doJsonRestore(){
+  const inp=document.createElement('input');inp.type='file';inp.accept='.json';
+  inp.onchange=async()=>{
+    const file=inp.files[0];if(!file)return;
+    const el=document.getElementById('jsonBackupStatus');
+    try{
+      const text=await file.text();
+      const backup=JSON.parse(text);
+      if(!backup.data?.races||!Array.isArray(backup.data.races))throw new Error('無効なバックアップファイルです');
+      const rc=backup.data.races.length;
+      const hc=backup.data.horseStore?Object.keys(backup.data.horseStore).length:0;
+      if(!confirm('バックアップから復元します。\n\nバックアップ: '+rc+'レース, '+hc+'頭\n現在: '+RACES.length+'レース, '+Object.keys(HORSE_STORE).length+'頭\n\n実行しますか？'))return;
+      RACES=backup.data.races;saveR(RACES);
+      if(backup.data.horseStore){HORSE_STORE=backup.data.horseStore;saveHorseStore(HORSE_STORE)}
+      if(backup.data.settings){const s={...loadSettings(),...backup.data.settings};saveSettings(s)}
+      HORSE_DB=buildHorseDB();updateCountBadge();
+      if(el)el.innerHTML='<div class="sync-status sync-ok" style="margin-top:8px">✅ 復元完了！ '+rc+'レース, '+hc+'頭</div>';
+    }catch(e){
+      if(el)el.innerHTML='<div class="sync-status sync-err" style="margin-top:8px">❌ '+e.message+'</div>';
+    }
+  };
+  inp.click();
 }
 
 async function doConnectFolder(){
