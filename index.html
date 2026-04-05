@@ -114,9 +114,9 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <script>(function(){var el=document.getElementById('verStr');if(el)el.textContent='ver 2.9.0 (更新: 2026-04-04)'})();</script>
 </header>
 <nav class="nav" id="navBar">
-<button class="on" onclick="showView('input')">＋ 入力</button>
+<button class="on" onclick="showView('input')">JRA取込</button>
 <button onclick="showView('list')">📋 予想<span id="countBadge"></span></button>
-<button onclick="showView('trends')">📊 ファクター</button>
+<button onclick="showView('trends')">📊 統計</button>
 <button onclick="showView('sync')">☁️ 同期</button>
 </nav>
 <div id="todaySummary" style="max-width:900px;margin:0 auto;padding:4px 8px"></div>
@@ -583,6 +583,43 @@ function buildHorseDB(){
   return db;
 }
 let HORSE_DB=buildHorseDB();
+
+// 前走データの自力構築（同一馬の過去出走から前走カラムを埋める）
+function buildPreviousFromHistory(){
+  let filled=0;
+  // HORSE_DB: {馬名: [{date, venue, dist, surface, cond, rank, runners, last3f, ...}]}
+  // RACES のscored から前走が空の馬を探し、HORSE_DBから前走を埋める
+  RACES.forEach(r=>{
+    if(!r.scored)return;
+    const rDate=r.info?.date;if(!rDate)return;
+    r.scored.forEach(h=>{
+      if(!h.name||!h.num)return;
+      if(h.prev&&h.prev.length>0)return; // 既に前走データあり
+      const history=HORSE_DB[h.name];if(!history||history.length<2)return;
+      // 日付昇順ソート
+      const sorted=[...history].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      // 今走より前のレースを探す
+      const prevRuns=sorted.filter(x=>(x.date||'')<rDate);
+      if(prevRuns.length===0)return;
+      const prev=prevRuns[prevRuns.length-1]; // 直近の前走
+      // prev配列を構築
+      const surfKey=prev.surface==='ダート'||prev.surface==='ダ'?'ダ':prev.surface==='芝'?'芝':prev.surface;
+      const dp=prev.date?prev.date.split('/'):[];
+      const dateKey=dp.length>=3?(+dp[0]*10000+ +dp[1]*100+ +dp[2]):0;
+      // 前走間隔
+      let interval=null;
+      try{const d1=new Date(prev.date);const d2=new Date(rDate);interval=Math.round((d2-d1)/86400000/7)}catch{}
+      h.prev=[{
+        fin:prev.rank,run:prev.runners,dist:prev.dist,surface:surfKey,
+        cond:prev.cond||'',venue:prev.venue||'',
+        f3:prev.last3f||0,pos:prev.positions||null,
+        gap:prev.rank===1?0:null,dateKey,
+      }];
+      filled++;
+    });
+  });
+  return filled;
+}
 
 // ===== DATE =====
 document.getElementById('dateStr').textContent=new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
@@ -2218,10 +2255,10 @@ CSVインポート・エクスポート、過去データの一括取り込み
 
 // === BULK IMPORT（過去結果一括取り込み）===
 function doBulkImport(){
-  const text=document.getElementById('bulkIn').value.trim();
-  if(!text){alert('レース結果を貼り付けてください');return}
-  const status=document.getElementById('bulkStatus');
-  const preview=document.getElementById('bulkPreview');
+  const text=(document.getElementById('raceIn')?.value||document.getElementById('bulkIn')?.value||'').trim();
+  if(!text){alert('テキストを貼り付けてください');return}
+  const status=document.getElementById('bulkStatus')||document.getElementById('importSummary');
+  const preview=document.getElementById('bulkPreview')||document.getElementById('importSummary');
   status.textContent='解析中...';
   preview.innerHTML='';
   
@@ -2350,18 +2387,26 @@ function doBulkImport(){
     }catch(e){errors++;errMsgs.push('ブロック'+(bi+1)+': '+e.message);console.error('一括取込エラー:',e)}
   });
   
+  let prevFilled=0;
   if(totalRaces>0){
     saveHorseStore(HORSE_STORE);
     saveR(RACES);
     HORSE_DB=buildHorseDB();
+    prevFilled=buildPreviousFromHistory();
+    if(prevFilled>0)saveR(RACES);
   }
-  
+
   let h='';
   if(totalRaces>0){
-    h+=`<div style="padding:8px;border:1px solid var(--grn);background:rgba(45,106,48,.06);font-size:13px;line-height:1.7">`;
-    h+=`<div style="font-weight:700;color:var(--grn);margin-bottom:4px">✓ ${totalRaces}レース・${totalHorses}頭を取り込みました</div>`;
-    imported.forEach(r=>{h+=`<div>${r.date} ${r.venue}${r.raceNum}R：${r.horses}頭</div>`});
-    h+=`<div style="margin-top:6px;color:var(--dim)">馬DB：${Object.keys(HORSE_DB).length}頭</div>`;
+    h+=`<div style="padding:10px 12px;border:2px solid var(--grn);background:rgba(45,106,48,.06);font-size:13px;line-height:1.8;border-radius:6px">`;
+    h+=`<div style="font-weight:900;color:var(--grn);margin-bottom:6px;font-size:14px">✅ 取込完了: ${totalRaces}レース・${totalHorses}頭</div>`;
+    imported.forEach(r=>{h+=`<div>${r.date} ${r.venue} ${r.raceNum}R — ${r.horses}頭</div>`});
+    h+=`<div style="border-top:1px solid var(--bdr);margin-top:6px;padding-top:6px">`;
+    h+=`着順: ${totalHorses}/${totalHorses}<br>`;
+    h+=`馬DB蓄積: ${Object.keys(HORSE_DB).length}頭<br>`;
+    h+=`前走自力構築: ${prevFilled}頭<br>`;
+    h+=`単勝オッズ: 0/${totalHorses}（※出馬表を別途取込してください）`;
+    h+=`</div>`;
     if(errors>0)h+=`<div style="color:var(--red);margin-top:4px">${errors}ブロック失敗</div>`;
     h+=`</div>`;
     status.textContent=`完了（${totalRaces}R/${totalHorses}頭）`;
@@ -2373,7 +2418,7 @@ function doBulkImport(){
     status.textContent='失敗';
   }
   preview.innerHTML=h;
-  document.getElementById('bulkIn').value='';
+  try{document.getElementById('bulkIn').value=''}catch{} try{document.getElementById('raceIn').value=''}catch{}
   
   }catch(e){
     status.textContent='エラー';
@@ -3341,12 +3386,16 @@ function importAnalysisCSV(text,fileName){
 
   if(imported>0||horseAccumulated>0){
     saveR(RACES);
-    // HORSE_STORE も保存
     try{localStorage.setItem(HK,JSON.stringify(HORSE_STORE))}catch{}
     HORSE_DB=buildHorseDB();
+    // 前走データの自力構築
+    const prevFilled=buildPreviousFromHistory();
+    if(prevFilled>0)saveR(RACES);
     renderList();
+    alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\n馬DB蓄積: ${horseAccumulated} 出走\n前走自力構築: ${prevFilled} 頭\nファイル: ${fileName}`);
+  }else{
+    alert(`取込なし（全レースが重複でスキップされました）`);
   }
-  alert(`CSV取込完了\n\n取込: ${imported} レース\nスキップ（重複）: ${skipped} レース\n馬DB蓄積: ${horseAccumulated} 出走\nファイル: ${fileName}`);
 }
 
 // === 騎手・調教師複勝率ヘルパー ===
