@@ -1316,22 +1316,40 @@ function buildIntegratedBet(scored,raceInfo){
   const axis=edgeHorses[0]||betHorses[0];
   // 相手（最大3頭）
   const partners=betHorses.filter(h=>h.num!==axis.num).slice(0,3);
-  // 馬券構成
+  // 馬券構成（CLAUDE.md v3.1: 頭数別ルール）
   const bets=[];
-  if(partners.length===0){
+  const nBet=betHorses.length;
+  const nEdge=edgeHorses.length;
+  if(nBet===1){
+    // 1頭 → 単勝のみ（EV10%以上）
     if(axis.ev>0.10)bets.push({type:'単勝',target:String(axis.num),ev:axis.ev,desc:String(axis.num)});
+  }else if(nBet===2){
+    // 2頭 → ワイド1点
+    const p=partners[0];
+    const a=Math.min(axis.num,p.num),b2=Math.max(axis.num,p.num);
+    bets.push({type:'ワイド',target:a+'—'+b2,ev:(axis.ev+p.ev)/2,desc:a+'—'+b2});
   }else{
-    partners.forEach(p=>{
-      const a=Math.min(axis.num,p.num),b=Math.max(axis.num,p.num);
-      bets.push({type:'ワイド',target:a+'—'+b,ev:(axis.ev+p.ev)/2,desc:a+'—'+b});
-    });
+    // 3頭以上 → ワイド（軸→2,3番手）+ 3連複（上位3頭BOX）
+    const top3=betHorses.slice(0,3);
+    // ワイド: 軸→2番手、軸→3番手
+    for(let i=1;i<top3.length;i++){
+      const a=Math.min(axis.num,top3[i].num),b2=Math.max(axis.num,top3[i].num);
+      bets.push({type:'ワイド',target:a+'—'+b2,ev:(axis.ev+top3[i].ev)/2,desc:a+'—'+b2});
+    }
+    // 3連複: 上位3頭ボックス（1点）
+    const trio=[top3[0].num,top3[1].num,top3[2].num].sort((a,b2)=>a-b2);
+    bets.push({type:'3連複',target:trio.join('—'),ev:(top3[0].ev+top3[1].ev+top3[2].ev)/3,desc:trio.join('—')});
+    // 4頭以上なら追加3連複（軸+2番手+4番手）
+    if(nBet>=4){
+      const extra=[top3[0].num,top3[1].num,betHorses[3].num].sort((a,b2)=>a-b2);
+      bets.push({type:'3連複',target:extra.join('—'),ev:(top3[0].ev+top3[1].ev+betHorses[3].ev)/3,desc:extra.join('—')});
+    }
   }
   // 戦略名
-  const nEdge=edgeHorses.length;const nBet=betHorses.length;
   let strategy;
   if(nEdge>=1&&nBet<=3)strategy='EDGE軸流し';
   else if(nBet>=4)strategy='ボックス';
-  else strategy='軸流し';
+  else strategy=nBet===1?'単騎':'軸流し';
   return{action:'BET',strategy,axis,partners,bets,horses,nEdge,nBet};
 }
 
@@ -3339,88 +3357,23 @@ function renderDetail(id){
       </div>
     </div>`;
   } else {
-  // ===== 推奨馬券パネル =====
-  const _marks=['◎','○','▲','△','×'];
-  const _markColors=['var(--red)','var(--blu)','var(--grn)','var(--gld)','var(--dim)'];
-  (()=>{
-    const _calcJkRate=(jkName)=>{
-      let total=0,w3=0;
-      RACES.forEach(r=>{
-        const top3=r.result?.top3?.map(n=>+n)||[];
-        (r.scored||[]).forEach(h=>{if((h.jk||'')!==jkName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
-        (r.result?.allResults||[]).forEach(ar=>{const sc=r.scored?.find(x=>x.num===ar.num);if((ar.jockey||sc?.jk||'')!==jkName)return;total++;if(ar.rank<=3)w3++});
-      });
-      return total>=3?{rate:Math.round(w3/total*100),total}:null;
-    };
-    const _calcTrRate=(trName)=>{
-      let total=0,w3=0;
-      RACES.forEach(r=>{
-        const top3=r.result?.top3?.map(n=>+n)||[];
-        (r.scored||[]).forEach(h=>{if((h.trainer||'')!==trName)return;const rank=h._resultRank||(top3.indexOf(h.num)>=0?top3.indexOf(h.num)+1:null);if(!rank)return;total++;if(rank<=3)w3++});
-      });
-      return total>=3?{rate:Math.round(w3/total*100),total}:null;
-    };
-    const _buildReason=(horse)=>{
-      if(!horse)return '';
-      const reasons=[];
-      const l=horse.prev?.[0];
-      if(l&&l.fin<=3)reasons.push('前走'+l.fin+'着/'+l.run+'頭');
-      else if(l?.gap!=null&&l.gap<=0.5)reasons.push('着差'+l.gap+'秒');
-      if(horse.f?.['距離']?.c==='g')reasons.push('同距離');
-      if(horse.f?.['馬場']?.c==='g')reasons.push('馬場一致');
-      if(horse.f?.['競馬場']?.c==='g')reasons.push('同競馬場');
-      if(horse.f?.['トレンド']?.c==='g')reasons.push('着順上昇中');
-      if(horse.jk){const jr=_calcJkRate(horse.jk);if(jr&&jr.rate>=33)reasons.push(horse.jk+'複勝率'+jr.rate+'%')}
-      if(horse.trainer){const tr=_calcTrRate(horse.trainer);if(tr&&tr.rate>=40)reasons.push(horse.trainer+'厩舎'+tr.rate+'%')}
-      return reasons.slice(0,4).join('・');
-    };
-    const A=s?.[0];
-    const reasonText=_buildReason(A);
-    if(!b||b.skipRecommended||b.totalInv===0){
-      h+=`<div style="background:var(--p3);border:3px solid var(--bdt);border-radius:8px;padding:14px 18px;margin-bottom:12px;text-align:center">
-        <div style="font-size:10px;font-weight:700;color:var(--lt);letter-spacing:3px;margin-bottom:4px">推奨馬券</div>
-        <div style="font-size:24px;font-weight:900;color:var(--dim)">このレースは買い目なし</div>
-        <div style="font-size:12px;color:var(--dim);margin-top:6px">${b?.patReason||'条件を満たす買い目がありません'}</div>
-      </div>`;
-    }else if(b?.tickets?.length>0){
-      const A2=b.best?.horses?.[0];
-      const B2=b.best?.horses?.[1];
-      const types=[...new Set(b.tickets.map(t=>t.type))].join('・');
-      const descs=b.tickets.map(t=>{const nums=t.horses?.map(h2=>h2.num)||[];return nums.join('─')}).join('、');
-      const axisEv=A2?._ev||0;
-      const evColor=axisEv>=1.2?'var(--grn)':axisEv>=0.8?'var(--gld)':'var(--red)';
-      const evLabel=axisEv>=1.2?'🟢 期待値高':axisEv>=0.8?'🟡 標��':'🔴 期待値低';
-      h+=`<div style="background:rgba(45,106,48,.08);border:3px solid var(--grn);border-radius:8px;padding:14px 18px;margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-size:10px;font-weight:700;color:var(--grn);letter-spacing:3px">推奨馬券</span>
-          ${axisEv>0?`<span style="font-size:12px;font-weight:700;color:${evColor}">${evLabel}（EV ${axisEv.toFixed(2)}）</span>`:''}
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-          <span style="font-size:18px;font-weight:900;color:var(--grn)">${types}</span>
-          <span style="font-family:'Shippori Mincho',serif;font-size:32px;font-weight:900;color:var(--ink);letter-spacing:6px">${descs}</span>
-          <span style="font-size:13px;color:var(--dim)">${b.totalInv}円</span>
-        </div>
-        ${reasonText?`<div style="font-size:13px;color:var(--grn);font-weight:700;margin-bottom:4px">根拠：${reasonText}</div>`:''}
-        <div style="font-size:11px;color:var(--dim)">${b.patName||''}</div>
-      </div>`;
-    }
-  })();
-  // ===== 推奨馬券パネルここまで =====
+  // ===== 旧推奨馬券パネル削除済み — 統合推奨馬券のみ表示（CLAUDE.md v3.1） =====
 
   // 馬場・コースデータ欠損チェック
   if(!r.info.surf||!r.info.cond||!r.info.type){
     h+=`<div style="background:rgba(196,30,58,.08);border:2px solid var(--red);padding:10px 14px;margin-bottom:8px;border-radius:4px;font-size:13px;font-weight:700;color:var(--red)">⚠️ 馬場データ未入力 — ${!r.info.surf?'コース ':''}${!r.info.cond?'馬場状態 ':''}${!r.info.type?'芝/ダート ':''}が不足しています。予想精度が低下する可能性があります。</div>`;
   }
-  // === 回収率モデル推奨（CLAUDE.md v3） ===
+  // === 統合推奨馬券（CLAUDE.md v3.1） ===
   if(s?.length>0){
     const ib=buildIntegratedBet(s,r.info);
     if(ib){
-      const vColors={'EDGE':'var(--grn)','BET':'var(--blu)','SKIP':'var(--dim)'};
+      const vColors={'EDGE':'var(--red)','BET':'var(--blu)','SKIP':'var(--dim)'};
+      const vMark={'EDGE':'◎','BET':'○','SKIP':'—'};
 
       // --- 推奨パネル ---
       if(ib.action==='BET'&&ib.bets?.length>0){
         h+=`<div class="pnl" style="border:2px solid var(--grn)">`;
-        h+=`<h3 class="b">💰 回収率モデル推奨</h3>`;
+        h+=`<h3 class="b">📊 統合推奨馬券</h3>`;
         h+=`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
           <span style="font-size:16px;font-weight:900;color:var(--grn)">${ib.bets.map(b=>b.type).filter((v,i,a)=>a.indexOf(v)===i).join('＋')}</span>
           <span style="font-family:'Shippori Mincho',serif;font-size:28px;font-weight:900;color:var(--ink);letter-spacing:4px">${ib.bets.map(b=>b.desc).join('、')}</span>
@@ -3430,7 +3383,7 @@ function renderDetail(id){
         // 軸馬
         const ax=ib.axis;
         h+=`<div style="background:var(--p2);border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;margin-bottom:8px">`;
-        h+=`<div style="font-weight:900;font-size:14px;color:var(--grn);margin-bottom:4px">[${ax.verdict}] 軸: ${ax.num}番 ${ax.name}　EV <span style="color:${ax.ev>0?'var(--grn)':'var(--red)'}">${ax.ev>=0?'+':''}${(ax.ev*100).toFixed(1)}%</span></div>`;
+        h+=`<div style="font-weight:900;font-size:14px;color:${vColors[ax.verdict]};margin-bottom:4px">${vMark[ax.verdict]||''}軸: ${ax.num}番 ${ax.name} [${ax.verdict}] EV <span style="color:${ax.ev>0?'var(--grn)':'var(--red)'}">${ax.ev>=0?'+':''}${(ax.ev*100).toFixed(1)}%</span></div>`;
         h+=`<div style="font-size:12px;color:var(--dim);line-height:1.7">`;
         h+=`ｵｯｽﾞ: ${ax.evOdds||'?'}${ax.oddsSrc==='推定'?'(推定)':''}　推定勝率: ${(ax.estWr*100).toFixed(1)}%`;
         h+=`<br>6因子: ${ax.statNs||0}（${(ax.statDetail||[]).join(' ')}）`;
@@ -3442,7 +3395,7 @@ function renderDetail(id){
         if(ib.partners.length>0){
           ib.partners.forEach(p=>{
             h+=`<div style="font-size:12px;padding:4px 0;border-bottom:1px dashed var(--bdr);display:flex;gap:6px;align-items:baseline">
-              <span style="font-weight:900;color:${vColors[p.verdict]||'var(--dim)'}">[${p.verdict}]</span>
+              <span style="font-weight:900;color:${vColors[p.verdict]||'var(--dim)'}">${vMark[p.verdict]||''}</span>
               <b>${p.num}</b> ${p.name}
               <span style="color:${p.ev>0?'var(--grn)':'var(--red)'}">EV${p.ev>=0?'+':''}${(p.ev*100).toFixed(1)}%</span>
               <span style="font-size:11px;color:var(--lt)">ｵｯｽﾞ${p.evOdds||'?'} 勝率${(p.estWr*100).toFixed(1)}% 6因子${p.statNs||0}</span>
@@ -3453,7 +3406,7 @@ function renderDetail(id){
         h+=`</div>`;
       }else if(ib.action==='SKIP'){
         h+=`<div class="pnl" style="border:2px solid var(--dim)">`;
-        h+=`<h3 class="b">💰 回収率モデル推奨</h3>`;
+        h+=`<h3 class="b">📊 統合推奨馬券</h3>`;
         h+=`<div style="font-size:16px;font-weight:900;color:var(--dim);margin-bottom:6px">⏭ このレースは見送り</div>`;
         h+=`<div style="font-size:12px;color:var(--dim)">${ib.reason||'期待値プラスの馬なし'}（最高EV: ${ib.bestEv!=null?(ib.bestEv*100).toFixed(1)+'%':'?'}）</div>`;
         h+=`</div>`;
@@ -3481,7 +3434,7 @@ function renderDetail(id){
         const blindBadge=x.isBlindSpot?'<span style="background:#FAEEDA;color:#854F0B;font-size:10px;padding:1px 4px;border-radius:3px;margin-left:3px">盲点</span>':'';
         const blinkerBadge=getBlinkerBadge(x);
         h+=`<tr style="background:${bg}">
-          <td style="padding:3px 6px;text-align:center;font-weight:900;color:${vColors[x.verdict]||'var(--dim)'}">${x.verdict}</td>
+          <td style="padding:3px 6px;text-align:center;font-weight:900;color:${vColors[x.verdict]||'var(--dim)'}">${vMark[x.verdict]||x.verdict}</td>
           <td style="padding:3px 6px;text-align:center;font-weight:700">${x.num||''}</td>
           <td style="padding:3px 6px;font-weight:700">${x.name||''}${blindBadge}${blinkerBadge}</td>
           <td style="padding:3px 6px;text-align:right">${x.evOdds?(x.evOdds.toFixed?x.evOdds.toFixed(1):x.evOdds):'—'}${x.oddsSrc==='推定'?'<span style="font-size:9px;color:var(--lt)">推</span>':''}</td>
