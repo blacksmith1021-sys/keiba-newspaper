@@ -1444,28 +1444,40 @@ function buildIntegratedBet(scored,raceInfo){
     }
   }
 
-  // ===== 馬券生成 =====
+  // ===== 馬券生成（v5: 最大300円、戦略B=穴込み3連複が最適） =====
   if(picks.length===0)return{action:'SKIP',reason:'該当馬なし',bestEv:0,horses,mode};
-  const axis=picks[0];
+  const axis=picks[0]; // ◎（必ず1-3番人気）
+  const partner=picks[1]; // ○
+  const ana=picks.find(p=>p.sMark==='穴');
+  const filler=picks[2]; // ▲（穴がいない場合のフォールバック）
   const bets=[];
-  // ワイド: ◎→各相手
-  for(let i=1;i<Math.min(picks.length,4);i++){
-    const a=Math.min(axis.num,picks[i].num),b2=Math.max(axis.num,picks[i].num);
-    bets.push({type:'ワイド',target:a+'—'+b2,ev:0,desc:a+'—'+b2,note:picks[i].sMark==='穴'?'穴狙い':''});
-  }
-  // 3連複: ◎○▲の3頭（必ず3頭）
-  if(picks.length>=3){
-    const trio=picks.slice(0,3).map(h=>h.num).sort((a,b2)=>a-b2);
-    bets.push({type:'3連複',target:trio.join('—'),ev:0,desc:trio.join('—')});
-  }
-  // 穴絡み3連複
-  if(picks.length>=4&&picks[3].sMark==='穴'){
-    const anaTrio=[picks[0].num,picks[1].num,picks[3].num].sort((a,b2)=>a-b2);
-    const dk=anaTrio.join('—');
-    if(!bets.some(b=>b.desc===dk))bets.push({type:'3連複',target:dk,ev:0,desc:dk,note:'穴狙い'});
-  }
 
-  const strategy=picks.length>=4?'本命軸＋穴':picks.length>=3?'本命軸流し':'軸流し';
+  if(!axis||!partner)return{action:'SKIP',reason:'該当馬不足',bestEv:0,horses,mode};
+
+  // 1点目: ワイド ◎—○（安定収入、的中率29%）
+  const w1=[Math.min(axis.num,partner.num),Math.max(axis.num,partner.num)];
+  bets.push({type:'ワイド',cost:100,target:w1.join('—'),ev:0,desc:w1.join('—')});
+
+  if(ana){
+    // ★戦略B: 穴馬あり → 回収率+11.8%の最適戦略
+    // 2点目: ワイド ◎—穴
+    const w2=[Math.min(axis.num,ana.num),Math.max(axis.num,ana.num)];
+    bets.push({type:'ワイド',cost:100,target:w2.join('—'),ev:0,desc:w2.join('—'),note:'穴狙い'});
+    // 3点目: 3連複 ◎—○—穴（★必ず3頭指定）
+    const trio=[axis.num,partner.num,ana.num].sort((a,b2)=>a-b2);
+    bets.push({type:'3連複',cost:100,target:trio.join('—'),ev:0,desc:trio.join('—'),note:'穴狙い'});
+  }else if(filler){
+    // 穴馬なし → 堅実パターン
+    // 2点目: ワイド ◎—▲
+    const w2=[Math.min(axis.num,filler.num),Math.max(axis.num,filler.num)];
+    bets.push({type:'ワイド',cost:100,target:w2.join('—'),ev:0,desc:w2.join('—')});
+    // 3点目: 3連複 ◎—○—▲
+    const trio=[axis.num,partner.num,filler.num].sort((a,b2)=>a-b2);
+    bets.push({type:'3連複',cost:100,target:trio.join('—'),ev:0,desc:trio.join('—')});
+  }
+  // 合計: 最大300円
+
+  const strategy=ana?'戦略B（穴込み3連複）':'堅実（◎○▲）';
   return{action:'BET',strategy,axis,partners:picks.slice(1),bets,horses,nEdge:0,nBet:picks.length,mode};
 }
 
@@ -3533,6 +3545,7 @@ function renderDetail(id){
           <span style="font-family:'Shippori Mincho',serif;font-size:28px;font-weight:900;color:var(--ink);letter-spacing:4px">${ib.bets.map(b=>b.desc).join('、')}</span>
           <span style="font-size:12px;color:var(--dim)">各100円（計${ib.bets.length*100}円）</span>
         </div>`;
+        h+=`<div style="font-size:12px;color:var(--dim);margin-bottom:8px">戦略: ${ib.strategy}</div>`;
         h+=`<div style="font-size:12px;color:var(--dim);margin-bottom:10px">戦略: ${ib.strategy}</div>`;
         // 軸馬
         const ax=ib.axis;
