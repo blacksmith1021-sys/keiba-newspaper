@@ -1296,9 +1296,7 @@ const EV_RATE_TABLE={
   '7_高':[.039,.195],'7_中':[.036,.141],'7_低':[.030,.108],
   '8_高':[.026,.099],'8_中':[.021,.145],'8_低':[.026,.089],
   '9_高':[.036,.111],'9_中':[.022,.093],'9_低':[.007,.074],
-  '10_高':[.012,.065],'10_中':[.014,.079],'10_低':[.014,.078],
-  '11_高':[.009,.047],'11_中':[.009,.047],'11_低':[.009,.047],
-  '12+':[.005,.030],
+  '10+':[.015,.076],'11+':[.009,.047],'12+':[.005,.030],
 };
 const EST_ODDS={1:2.5,2:4.5,3:7.0,4:11.0,5:16.0,6:22.0,7:32.0,8:45.0,9:60.0,10:80.0,11:100,12:130,13:160,14:200,15:250,16:300,17:350,18:400};
 function getFactorTier(sf,pop){
@@ -1307,9 +1305,10 @@ function getFactorTier(sf,pop){
 }
 function getEstimatedRates(pop,sf){
   if(pop>=12)return EV_RATE_TABLE['12+']||[.005,.030];
+  if(pop>=11)return EV_RATE_TABLE['11+']||[.009,.047];
+  if(pop>=10)return EV_RATE_TABLE['10+']||[.015,.076];
   const tier=getFactorTier(sf,pop);
-  const p=Math.min(Math.max(pop,1),11);
-  return EV_RATE_TABLE[p+'_'+tier]||[.005,.030];
+  return EV_RATE_TABLE[pop+'_'+tier]||[.005,.030];
 }
 
 // --- 穴馬判定（v4: 6番人気以下の好走確率を引き上げる5因子） ---
@@ -1378,101 +1377,96 @@ function judgeHorse(h,raceInfo){
 // --- レース推奨生成（モード自動切替: オッズあり→回収率 / なし→スコア） ---
 function buildIntegratedBet(scored,raceInfo){
   if(!scored||scored.length===0)return null;
-  // オッズ有無でモード判定
   const hasRealOdds=scored.some(h=>h.odds&&h.odds>0);
   const mode=hasRealOdds?'ROI':'SCORE';
+  const sf=h=>h.statNs||0;
 
+  // 全馬の基礎データを構築
   const horses=scored.map(h=>{
     const j=judgeHorse(h,raceInfo);
-    // スコアモード用: 統合スコア判定
-    const existing=(h.adjNs!=null?h.adjNs:h.ns)||0;
-    const sf=h.statNs||0;
     const prevScore=calcPrevScore(h);
-    const intScore=sf+(prevScore>=40?15:prevScore>=25?8:prevScore>=10?3:0);
-    let sMark,sLabel;
-    if(existing>=70&&intScore>=20){sMark='◎';sLabel='本命'}
-    else if(intScore>=20){sMark='○';sLabel='統計推奨'}
-    else if(existing>=70){sMark='▲';sLabel='穴候補'}
-    else{sMark='△';sLabel='押さえ'}
+    const intScore=(h.statNs||0)+(prevScore>=40?15:prevScore>=25?8:prevScore>=10?3:0);
     return{...h,verdict:j.verdict,ev:j.ev,estWr:j.wr,estPr:j.pr,
-      evOdds:j.odds,oddsSrc:j.oddsSrc,prevScore,intScore,sMark,sLabel};
+      evOdds:j.odds,oddsSrc:j.oddsSrc,prevScore,intScore,sMark:'△',sLabel:'押さえ'};
   });
 
-  if(mode==='ROI'){
-    // --- 回収率モード ---
-    // 穴馬でEVがそこまで悪くない馬に穴マーク
-    horses.forEach(h=>{if(h.isAnaUma&&h.ev>-0.10&&h.verdict==='SKIP'){h.verdict='ANA';h.sMark='穴';h.sLabel='穴'}});
-    horses.sort((a,b)=>b.ev-a.ev);
-    const betHorses=horses.filter(h=>h.verdict==='BET'||h.verdict==='EDGE');
-    const anaHorses=horses.filter(h=>h.verdict==='ANA');
-    if(betHorses.length===0&&anaHorses.length===0)return{action:'SKIP',reason:'期待値プラスの馬なし',bestEv:horses[0]?.ev||0,horses,mode};
-    if(betHorses.length===0&&anaHorses.length>0)return{action:'SKIP',reason:'穴馬のみ（BET馬なし）',bestEv:horses[0]?.ev||0,horses,mode};
-    if(betHorses.length===1&&betHorses[0].ev<0.10&&anaHorses.length===0)return{action:'SKIP',reason:'BET1頭かつEV+10%未満',bestEv:betHorses[0].ev,horses,mode};
-    const edgeHorses=betHorses.filter(h=>h.verdict==='EDGE');
-    const axis=edgeHorses[0]||betHorses[0];
-    const mainPartners=betHorses.filter(h=>h.num!==axis.num).slice(0,3);
-    // 穴馬を相手に追加（最大4頭）
-    const allPartners=[...mainPartners];
-    if(anaHorses.length>0&&allPartners.length<3)allPartners.push(anaHorses[0]);
-    const bets=[];const nBet=betHorses.length;const nEdge=edgeHorses.length;
-    if(nBet===1&&allPartners.length===0){
-      if(axis.ev>0.10)bets.push({type:'単勝',target:String(axis.num),ev:axis.ev,desc:String(axis.num)});
-    }else{
-      allPartners.forEach(p=>{
-        const a=Math.min(axis.num,p.num),b2=Math.max(axis.num,p.num);
-        bets.push({type:'ワイド',target:a+'—'+b2,ev:(axis.ev+p.ev)/2,desc:a+'—'+b2,note:p.verdict==='ANA'?'穴狙い':''});
-      });
-      if(allPartners.length>=2){
-        const trio=[axis.num,allPartners[0].num,allPartners[1].num].sort((a,b2)=>a-b2);
-        bets.push({type:'3連複',target:trio.join('—'),ev:0,desc:trio.join('—')});
-      }
-      // 穴絡み3連複
-      if(anaHorses.length>0&&mainPartners.length>=1){
-        const anaTrio=[axis.num,mainPartners[0].num,anaHorses[0].num].sort((a,b2)=>a-b2);
-        const dk=anaTrio.join('—');
-        if(!bets.some(b=>b.desc===dk))bets.push({type:'3連複',target:dk,ev:0,desc:dk,note:'穴狙い'});
-      }
-    }
-    let strategy;
-    if(nEdge>=1&&nBet<=3)strategy='EDGE軸流し';else if(nBet>=4)strategy='ボックス';else strategy=nBet===1?'単騎':'軸流し';
-    if(anaHorses.length>0)strategy+='＋穴';
-    return{action:'BET',strategy,axis,partners:allPartners,bets,horses,nEdge,nBet,mode};
-  }else{
-    // --- スコアモード（オッズなし → 必ず買い目を出す） ---
-    // 穴馬マーク付与
-    horses.forEach(h=>{
-      if(h.sMark==='△'&&h.isAnaUma)h.sMark='穴';
-    });
-    const markOrder={'◎':0,'○':1,'▲':2,'穴':3,'△':4};
-    horses.sort((a,b)=>(markOrder[a.sMark]||9)-(markOrder[b.sMark]||9)||(b.intScore||0)-(a.intScore||0));
-    const axis=horses[0];
-    const mainPicks=horses.filter(h=>h.num!==axis.num&&['◎','○','▲'].includes(h.sMark)).slice(0,3);
-    const anaPicks=horses.filter(h=>h.sMark==='穴').slice(0,1);
-    // スコアモードでは最低2頭確保
-    if(mainPicks.length===0&&horses.length>=2)mainPicks.push(horses.find(h=>h.num!==axis.num));
-    // 穴馬を相手候補に追加（最大4頭）
-    const allPicks=[...mainPicks];
-    if(anaPicks.length>0&&allPicks.length<3)allPicks.push(anaPicks[0]);
-    const bets=[];
-    allPicks.forEach(p=>{
-      const a=Math.min(axis.num,p.num),b2=Math.max(axis.num,p.num);
-      bets.push({type:'ワイド',target:a+'—'+b2,ev:0,desc:a+'—'+b2,note:p.sMark==='穴'?'穴狙い':''});
-    });
-    if(allPicks.length>=2){
-      const trio=[axis.num,allPicks[0].num,allPicks[1].num].sort((a,b2)=>a-b2);
-      bets.push({type:'3連複',target:trio.join('—'),ev:0,desc:trio.join('—')});
-    }
-    // 穴絡み3連複
-    if(anaPicks.length>0&&mainPicks.length>=1){
-      const anaTrio=[axis.num,mainPicks[0].num,anaPicks[0].num].sort((a,b2)=>a-b2);
-      const dupKey=anaTrio.join('—');
-      if(!bets.some(b=>b.desc===dupKey)){
-        bets.push({type:'3連複',target:dupKey,ev:0,desc:dupKey,note:'穴狙い'});
-      }
-    }
-    const strategy=axis.sMark==='◎'?'本命軸流し':'スコア上位流し';
-    return{action:'BET',strategy,axis,partners:allPicks,bets,horses,nEdge:0,nBet:horses.filter(h=>['◎','○'].includes(h.sMark)).length,mode};
+  // ===== v5: 印の決定（◎は必ず1-3番人気から） =====
+  const used=new Set();
+  const picks=[];
+
+  // ◎: 1-3番人気の中で6因子最高
+  const tier1=horses.filter(h=>h.pop>=1&&h.pop<=3).sort((a,b)=>sf(b)-sf(a));
+  // フォールバック: 1-3番人気がいなければ4-5番人気
+  const tier1fb=tier1.length>0?tier1:horses.filter(h=>h.pop>=1&&h.pop<=5).sort((a,b)=>sf(b)-sf(a));
+  if(tier1fb.length>0){
+    tier1fb[0].sMark='◎';tier1fb[0].sLabel='本命';
+    picks.push(tier1fb[0]);used.add(tier1fb[0].num);
   }
+
+  // ○: 1-5番人気で◎以外の6因子最高
+  const tier2=horses.filter(h=>h.pop>=1&&h.pop<=5&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
+  if(tier2.length>0){
+    tier2[0].sMark='○';tier2[0].sLabel='対抗';
+    picks.push(tier2[0]);used.add(tier2[0].num);
+  }
+
+  // ▲: 1-5番人気で◎○以外の6因子最高
+  const tier3=horses.filter(h=>h.pop>=1&&h.pop<=5&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
+  if(tier3.length>0){
+    tier3[0].sMark='▲';tier3[0].sLabel='単穴';
+    picks.push(tier3[0]);used.add(tier3[0].num);
+  }
+
+  // 穴: 6番人気以下で穴因子4以上の最上位1頭
+  const tierAna=horses.filter(h=>(h.pop||99)>=6&&h.isAnaUma&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
+  if(tierAna.length>0&&picks.length<4){
+    tierAna[0].sMark='穴';tierAna[0].sLabel='穴';
+    picks.push(tierAna[0]);used.add(tierAna[0].num);
+  }
+
+  // 残りは△
+  horses.forEach(h=>{if(!used.has(h.num)){h.sMark='△';h.sLabel=''}});
+
+  // ===== 回収率モード: EVフィルタ =====
+  if(mode==='ROI'&&picks.length>0){
+    // 各pickのEVを計算
+    picks.forEach(h=>{
+      const [wr]=getEstimatedRates(h.pop||9,h.statNs||0);
+      let mult=1.0;
+      if(h.prevScore>=40)mult=1.20;else if(h.prevScore>=25)mult=1.10;
+      else if(h.prevScore!=null&&h.prevScore<10)mult=0.85;
+      h.estWr=Math.min(wr*mult,.60);
+      h.ev=h.evOdds?h.estWr*h.evOdds-1:0;
+    });
+    // 全員EV-10%以下なら見送り
+    if(picks.every(h=>h.ev<-0.10)){
+      return{action:'SKIP',reason:'最高EV: '+(Math.max(...picks.map(h=>h.ev))*100).toFixed(1)+'%',bestEv:Math.max(...picks.map(h=>h.ev)),horses,mode};
+    }
+  }
+
+  // ===== 馬券生成 =====
+  if(picks.length===0)return{action:'SKIP',reason:'該当馬なし',bestEv:0,horses,mode};
+  const axis=picks[0];
+  const bets=[];
+  // ワイド: ◎→各相手
+  for(let i=1;i<Math.min(picks.length,4);i++){
+    const a=Math.min(axis.num,picks[i].num),b2=Math.max(axis.num,picks[i].num);
+    bets.push({type:'ワイド',target:a+'—'+b2,ev:0,desc:a+'—'+b2,note:picks[i].sMark==='穴'?'穴狙い':''});
+  }
+  // 3連複: ◎○▲の3頭（必ず3頭）
+  if(picks.length>=3){
+    const trio=picks.slice(0,3).map(h=>h.num).sort((a,b2)=>a-b2);
+    bets.push({type:'3連複',target:trio.join('—'),ev:0,desc:trio.join('—')});
+  }
+  // 穴絡み3連複
+  if(picks.length>=4&&picks[3].sMark==='穴'){
+    const anaTrio=[picks[0].num,picks[1].num,picks[3].num].sort((a,b2)=>a-b2);
+    const dk=anaTrio.join('—');
+    if(!bets.some(b=>b.desc===dk))bets.push({type:'3連複',target:dk,ev:0,desc:dk,note:'穴狙い'});
+  }
+
+  const strategy=picks.length>=4?'本命軸＋穴':picks.length>=3?'本命軸流し':'軸流し';
+  return{action:'BET',strategy,axis,partners:picks.slice(1),bets,horses,nEdge:0,nBet:picks.length,mode};
 }
 
 // 後方互換: statScoreToRate（旧コードから参照される場合用）
