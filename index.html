@@ -767,17 +767,30 @@ for(let i=0;i<L.length;i++){if(/^\d+\.\dkg$/.test(L[i])){for(let j=i+1;j<L.lengt
 m=sec.match(/父：(.+)/);if(m)h.sire=m[1].trim();m=sec.match(/母の父：(.+)/);if(m)h.bms=m[1].trim();if(!h.bms){m=sec.match(/母父[:：]\s*(.+)/);if(m)h.bms=m[1].trim()}m=sec.match(/([^\n]+)\((美浦|栗東)\)/);if(m)h.trainer=m[1].trim();
 // 総賞金（馬ごとのsec内から取得）
 m=sec.match(/([0-9,]+)\s*万円/);if(m){const pv=parseInt(m[1].replace(/,/g,''));if(pv>0&&pv<100000)h.prize=pv}
-h.prev=[];const pp=/(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\S+)\s*\n\s*([^\n]+)\s*\n\s*(\d+)着\s+(\d+)頭/g;let pm;while((pm=pp.exec(sec))!==null){const pr={fin:+pm[6],run:+pm[7],dateKey:pm[1]*10000+ +pm[2]*100+ +pm[3],venue:pm[4],cls:pm[5]};const af=sec.substring(pm.index+pm[0].length);let x=af.match(/3F\s+([\d.]+)/);if(x)pr.f3=parseFloat(x[1]);x=af.match(/(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\n?\s*3F/);if(x)pr.pos=[+x[1],+x[2],+x[3],+x[4]];x=af.match(/(\d{4})(芝|ダ)/);if(x){pr.dist=+x[1];pr.surface=x[2]}
+h.prev=[];const pp=/(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\S+)\s*\n\s*([^\n]+)\s*\n\s*(\d+)着\s+(\d+)頭/g;let pm;while((pm=pp.exec(sec))!==null){const pr={fin:+pm[6],run:+pm[7],dateKey:pm[1]*10000+ +pm[2]*100+ +pm[3],venue:pm[4],cls:pm[5]};const af=sec.substring(pm.index+pm[0].length);
+// 前走馬番・人気
+let x=af.match(/(\d+)頭(\d+)番/);if(x)pr.prevNum=+x[2];
+x=af.match(/(\d+)番人気/);if(x)pr.prevPop=+x[1];
+// 前走上がり（3F or 1F）
+x=af.match(/[13]F\s+([\d.]+)/);if(x)pr.f3=parseFloat(x[1]);
+// 通過順位
+x=af.match(/(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\n?\s*[13]F/);if(x)pr.pos=[+x[1],+x[2],+x[3],+x[4]];
+if(!pr.pos){x=af.match(/(\d+)\s+(\d+)\s*\n?\s*[13]F/);if(x)pr.pos=[+x[1],+x[2]]}
+// 距離+コース
+x=af.match(/(\d{4})(芝|ダ)/);if(x){pr.dist=+x[1];pr.surface=x[2]}
+// 前走タイム
+x=af.match(/(\d:\d{2}\.\d)/);if(x)pr.time=x[1];
 // 前走馬場状態
 x=af.match(/(良|稍重|重|不良)/);if(x)pr.cond=x[1];
 // 前走斤量・騎手
 const wLines=af.split('\n').map(l=>l.trim()).filter(Boolean);
 for(let wi=0;wi<wLines.length;wi++){if(wLines[wi].match(/^\d{2}\.\d$/)){pr.weight=parseFloat(wLines[wi]);if(wi+1<wLines.length){const jl=wLines[wi+1];if(jl&&jl.match(/^[一-龥ぁ-ん]/)&&jl.length<15)pr.jockey=jl.replace(/[◆◇△▲★☆]/g,'').trim()}break}}
+// 前走馬体重
+x=af.match(/(\d{3})kg/);if(x)pr.prevWt=+x[1];
 // 前走の回り方向
 if(LEFT_VENUES.some(v=>(pr.venue||'').includes(v)))pr.dir='左';else if(RIGHT_VENUES.some(v=>(pr.venue||'').includes(v)))pr.dir='右';
-// 着差（1着馬との差）: "馬名(0.6)" パターン
+// 着差: "馬名(N.N)" パターン
 x=af.match(/\n([ァ-ヶー\u3000-\u9FFFa-zA-Z]+)\(([\d.]+)\)/);if(x)pr.gap=parseFloat(x[2]);
-// 1着馬の場合は gap=0
 if(pr.fin===1)pr.gap=0;
 h.prev.push(pr)}
 // 日付の新しい順にソート（前走が[0]になるように）
@@ -2174,20 +2187,25 @@ function showView(v){
 
 // === INPUT ===
 document.getElementById('vInput').innerHTML=`
-<div class="pnl"><h3 class="r">出馬表を貼り付けて分析</h3>
-<div style="font-size:12px;color:var(--dim);margin-bottom:6px">JRA公式サイトの出馬表をコピーして貼り付けてください</div>
-<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表をコピーして貼り付け"></textarea>
+<div class="pnl"><h3 class="r">JRAデータ取込</h3>
+<div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
+JRA公式サイトの<b>出馬表</b>または<b>レース結果</b>ページをCtrl+A → Ctrl+Cでコピーし、下に貼り付けてください。<br>
+テキストの種類は自動判定されます。出馬表なら<b>オッズ＋前走データ</b>を、レース結果なら<b>着順＋払戻金</b>を取り込みます。
+</div>
+<textarea id="raceIn" rows="8" placeholder="JRA公式サイトの出馬表 or レース結果をコピーして貼り付け&#10;&#10;・出馬表 → 単勝オッズ＋前走データを取得&#10;・レース結果 → 着順＋タイム＋払戻金を取得"></textarea>
 <div id="analyzeError" class="hidden"></div>
-<div style="margin-top:8px"><button class="btn btn-r" onclick="doAnalyze()">分析開始</button></div></div>
-
+<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+<button class="btn btn-r" onclick="doAnalyze()">出馬表として分析</button>
+<button class="btn btn-b" onclick="doBulkImport()">レース結果として取込</button>
+<button class="btn-s" onclick="doAutoImport()" style="padding:8px 16px;color:var(--grn);font-weight:700">自動判定で取込</button>
+</div>
+<div id="importSummary" style="margin-top:8px"></div>
+</div>
 
 <div class="pnl" style="border-top:2px solid var(--bdt)">
-<h3 class="b">📥 過去レース結果の一括取り込み（馬DB蓄積用）</h3>
+<h3 class="b">📂 データ管理</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.7">
-JRAの<b>レース結果ページ</b>を1レースずつ、または複数レースまとめてコピーして貼り付けてください。<br>
-着順・タイム・上がり・通過順位が馬DBに蓄積され、今後の予想精度が向上します。<br>
-※レース一覧には表示されません（馬DBへの蓄積専用です）。<br>
-※出馬表ではなく「レース結果」ページです。着順データが含まれるテキストを貼り付けてください。
+CSVインポート・エクスポート、過去データの一括取り込み
 </div>
 <textarea id="bulkIn" rows="8" placeholder="JRAレース結果ページをコピーして貼り付け&#10;&#10;複数レース分をまとめて貼り付けてもOK&#10;（各レースの区切りは自動検出します）"></textarea>
 <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
@@ -2528,10 +2546,30 @@ function parseOddsText(text,mode){
 }
 
 let _dupOverwrite=false;
+function doAutoImport(){
+  const t=(document.getElementById('raceIn')?.value||'').trim();
+  if(!t){alert('テキストを貼り付けてください');return}
+  const summary=document.getElementById('importSummary');
+  // 自動判定
+  let type='unknown';
+  if(t.includes('払戻金')&&(t.includes('着順')||t.match(/\d+\s+枠\d/))){type='results'}
+  else if(t.match(/\d+着\s+\d+頭/)||t.includes('番人気')){type='shutsuba'}
+  else if(t.match(/枠\d/)){type='shutsuba'}
+  if(type==='results'){
+    if(summary)summary.innerHTML='<div style="font-size:12px;color:var(--blu)">自動判定: レース結果 → 取込中...</div>';
+    setTimeout(()=>doBulkImport(),100);
+  }else if(type==='shutsuba'){
+    if(summary)summary.innerHTML='<div style="font-size:12px;color:var(--red)">自動判定: 出馬表 → 分析中...</div>';
+    setTimeout(()=>doAnalyze(),100);
+  }else{
+    if(summary)summary.innerHTML='<div style="font-size:12px;color:var(--red)">テキストの種類を判定できませんでした。「出馬表として分析」か「レース結果として取込」を選んでください。</div>';
+  }
+}
+
 function doAnalyze(){
   try{
   const t=document.getElementById('raceIn').value.trim();
-  if(!t){alert('出馬表を貼り付けてください');return}
+  if(!t){alert('テキストを貼り付けてください');return}
   const parsed=parse(t);
   if(parsed.horses.length===0){
     const wakuCount=t.split('\n').filter(l=>l.trim().startsWith('枠')).length;
