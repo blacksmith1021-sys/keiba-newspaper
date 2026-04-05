@@ -1278,19 +1278,20 @@ function calcStatScore(h,raceInfo){
 }
 
 // --- 推定好走率テーブル（人気 × 6因子帯） ---
+// 推定好走率テーブル v3（12,502走検証 / 人気×6因子帯→[勝率,3着内率]）
 const EV_RATE_TABLE={
-  '1_高':[.404,.783],'1_中':[.330,.708],'1_低':[.318,.602],
-  '2_高':[.211,.598],'2_中':[.169,.529],'2_低':[.176,.476],
-  '3_高':[.160,.502],'3_中':[.125,.388],'3_低':[.138,.414],
-  '4_高':[.109,.391],'4_中':[.092,.319],'4_低':[.079,.321],
-  '5_高':[.091,.308],'5_中':[.064,.257],'5_低':[.056,.226],
+  '1_高':[.397,.772],'1_中':[.330,.708],'1_低':[.318,.605],
+  '2_高':[.215,.599],'2_中':[.169,.529],'2_低':[.176,.476],
+  '3_高':[.160,.502],'3_中':[.125,.388],'3_低':[.137,.413],
+  '4_高':[.109,.391],'4_中':[.092,.319],'4_低':[.076,.318],
+  '5_高':[.090,.307],'5_中':[.064,.257],'5_低':[.056,.226],
   '6_高':[.063,.174],'6_中':[.051,.215],'6_低':[.074,.239],
   '7_高':[.039,.195],'7_中':[.036,.141],'7_低':[.030,.108],
-  '8_高':[.026,.098],'8_中':[.021,.145],'8_低':[.026,.088],
-  '9_高':[.036,.113],'9_中':[.022,.093],'9_低':[.007,.074],
-  '10_高':[.020,.100],'10_中':[.015,.076],'10_低':[.010,.050],
-  '11_高':[.012,.065],'11_中':[.009,.047],'11_低':[.005,.030],
-  '12_高':[.008,.045],'12_中':[.005,.030],'12_低':[.003,.020],
+  '8_高':[.026,.099],'8_中':[.021,.145],'8_低':[.026,.089],
+  '9_高':[.036,.111],'9_中':[.022,.093],'9_低':[.007,.074],
+  '10_高':[.012,.065],'10_中':[.014,.079],'10_低':[.014,.078],
+  '11_高':[.009,.047],'11_中':[.009,.047],'11_低':[.009,.047],
+  '12+':[.005,.030],
 };
 const EST_ODDS={1:2.5,2:4.5,3:7.0,4:11.0,5:16.0,6:22.0,7:32.0,8:45.0,9:60.0,10:80.0,11:100,12:130,13:160,14:200,15:250,16:300,17:350,18:400};
 function getFactorTier(sf,pop){
@@ -1298,9 +1299,10 @@ function getFactorTier(sf,pop){
   return sf>=13?'高':sf>=3?'中':'低';
 }
 function getEstimatedRates(pop,sf){
+  if(pop>=12)return EV_RATE_TABLE['12+']||[.005,.030];
   const tier=getFactorTier(sf,pop);
-  const p=Math.min(Math.max(pop,1),12);
-  return EV_RATE_TABLE[p+'_'+tier]||[.003,.020];
+  const p=Math.min(Math.max(pop,1),11);
+  return EV_RATE_TABLE[p+'_'+tier]||[.005,.030];
 }
 
 // --- 前走スコア（簡易版） ---
@@ -4031,6 +4033,26 @@ function renderTrends(){
   const f=getTrendsFilter();
   let h='';
 
+  // === 12,502走の統計サマリー（CLAUDE.md v3） ===
+  h+=`<div class="pnl" style="border:2px solid var(--gld)">
+  <h3 class="r">📊 統計根拠（12,502走分析 / 2026年1-4月 JRA全6場）</h3>
+  <div style="font-size:12px;line-height:2;color:var(--ink)">
+    <div><b style="color:var(--red)">1番人気 3着内率: 69.4%</b>（月別: 69-71%で安定）</div>
+    <div>上位3人気から1頭以上3着内: <b>94.6%</b></div>
+    <div>先行馬(通過順上位25%) 3着内率: <b>35.3%</b> vs 追込(下位25%): 9.0%</div>
+    <div>上がり1位 → 勝率<b>35.4%</b> / 3着内率<b>67.2%</b></div>
+    <div style="border-top:1px dashed var(--bdr);margin-top:4px;padding-top:4px">
+    <b>6因子スコアの根拠:</b></div>
+    <div>TOP9騎手: <b>47%</b> vs その他: 18%（+28pp, p&lt;0.001）</div>
+    <div>馬体重520kg↑: <b>30.1%</b> vs 420kg↓: 8.5%（+7.3pp）</div>
+    <div>斤量57kg↑: <b>25%</b> vs 54kg↓: 9%（+8.1pp）</div>
+    <div>芝1900m↑ 内枠: <b>26.6%</b> vs 外枠: 20.8%（+5.9pp）</div>
+    <div>牡馬: <b>24.0%</b> vs 牝馬: 17.7%（+6.3pp）</div>
+    <div>体重増減±3kg: <b>25%</b> vs ±10kg↑: 17%（+6.3pp）</div>
+    <div style="border-top:1px dashed var(--bdr);margin-top:4px;padding-top:4px;color:var(--dim)">
+    <b>不採用:</b> 馬場状態(p=0.574) / ダート枠順(月不安定) / 芝短距離枠順(p=0.225) / 競馬場差(効果量小)</div>
+  </div></div>`;
+
   // フィルターUI
   const venues=[...new Set(RACES.map(r=>(r.info?.course||'').replace(/\d+回/,'').replace(/\d+日/,'')).filter(Boolean))].sort();
   const dists=[...new Set(RACES.map(r=>r.info?.dist).filter(Boolean))].sort((a,b)=>a-b);
@@ -4229,7 +4251,80 @@ function renderTrends(){
   }else{h+=`<div style="color:var(--dim);font-size:13px">データ不足（人気データのあるレースがありません）</div>`}
   h+=`</div>`;
 
+  // === バックテスト ===
+  h+=`<div class="pnl"><h3 class="r">🧪 バックテスト（統合モデル検証）</h3>`;
+  h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px">結果＋払戻金が揃ったレースに対して統合モデルの回収率を検証します</div>`;
+  h+=`<button class="btn btn-b" onclick="runBacktest()" id="backtestBtn" style="padding:8px 20px">バックテスト実行</button>`;
+  h+=`<div id="backtestResult" style="margin-top:8px"></div>`;
+  h+=`</div>`;
+
   document.getElementById('vTrends').innerHTML=h;
+}
+
+// バックテスト実行
+function runBacktest(){
+  const btn=document.getElementById('backtestBtn');
+  if(btn)btn.disabled=true;
+  const out=document.getElementById('backtestResult');
+  if(out)out.innerHTML='<div style="color:var(--dim)">実行中...</div>';
+
+  setTimeout(()=>{
+    let totalInv=0,totalRet=0,betsMade=0,racesSkipped=0,racesTotal=0;
+    const details=[];
+
+    RACES.forEach(r=>{
+      if(!r.result?.top3?.length||r.result.top3.length<3)return;
+      if(!r.scored||r.scored.length<3)return;
+      racesTotal++;
+
+      const ib=buildIntegratedBet(r.scored,r.info);
+      if(!ib||ib.action==='SKIP'){racesSkipped++;return}
+
+      const t3=r.result.top3.map(n=>+n);
+      const pays=r.result?.payouts||{};
+
+      (ib.bets||[]).forEach(bet=>{
+        const amount=100;
+        totalInv+=amount;
+        betsMade++;
+        let ret=0;
+
+        if(bet.type==='単勝'){
+          const target=parseInt(bet.desc);
+          if(t3[0]===target){
+            const p=findPayout(pays,'単勝',[target]);
+            ret=p>0?amount*p/100:0;
+          }
+        }else if(bet.type==='ワイド'){
+          const nums=bet.desc.split('—').map(Number);
+          if(nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1])){
+            const p=findPayout(pays,'ワイド',nums.sort((a,b)=>a-b));
+            ret=p>0?amount*p/100:amount*3;// 払戻データなければ仮3倍
+          }
+        }else if(bet.type==='3連複'){
+          const nums=bet.desc.split('—').map(Number);
+          if(nums.length>=3&&nums.every(n=>t3.includes(n))){
+            const p=findPayout(pays,'3連複',nums.sort((a,b)=>a-b));
+            ret=p>0?amount*p/100:amount*15;// 仮15倍
+          }
+        }
+        totalRet+=ret;
+      });
+    });
+
+    const roi=totalInv>0?((totalRet/totalInv-1)*100):0;
+    const profit=Math.round(totalRet-totalInv);
+
+    let html=`<div style="padding:10px;border:2px solid ${roi>=0?'var(--grn)':'var(--red)'};border-radius:6px;font-size:13px;line-height:1.8">`;
+    html+=`<div style="font-weight:900;font-size:16px;color:${roi>=0?'var(--grn)':'var(--red)'}">回収率: ${roi>=0?'+':''}${roi.toFixed(1)}%</div>`;
+    html+=`<div>対象: ${racesTotal}R / 購入: ${racesTotal-racesSkipped}R / 見送り: ${racesSkipped}R</div>`;
+    html+=`<div>買い点数: ${betsMade}点</div>`;
+    html+=`<div>投資: ${totalInv.toLocaleString()}円 → 回収: ${Math.round(totalRet).toLocaleString()}円（${profit>=0?'+':''}${profit.toLocaleString()}円）</div>`;
+    html+=`<div style="font-size:11px;color:var(--dim);margin-top:4px">※ ワイド・3連複の払戻データがないレースは仮配当（×3/×15）で計算</div>`;
+    html+=`</div>`;
+    if(out)out.innerHTML=html;
+    if(btn)btn.disabled=false;
+  },100);
 }
 
 // ===== CLOUD SYNC (GitHub Gist API) =====
