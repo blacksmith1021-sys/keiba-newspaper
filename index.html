@@ -3629,10 +3629,9 @@ function renderDetail(id){
     }
   }
 
-  // === レース観戦ガイド ===
-  if(b&&!b.skipRecommended&&b.tickets?.length>0){
-    const axisHorse=s?.[0];
-    const ax=axisHorse?s.find(sc=>sc.num===axisHorse.num):null;
+  // === レース観戦ガイド（統合推奨馬券と同じ印・同じ馬を使う） ===
+  if(ib&&ib.action==='BET'&&ib.axis){
+    const ax=ib.axis; // 統合推奨の◎馬
     const dist=r.info.dist||1800;
     const headCount=s?.length||0;
 
@@ -3724,12 +3723,32 @@ function renderDetail(id){
       h+=`</div>`;
     }
 
-    // --- 3-2. 馬券別「的中条件チェック」 ---
+    // --- 注目馬一覧（統合推奨と同一） ---
+    if(ib.partners&&ib.partners.length>0){
+      h+=`<div style="background:var(--p2);border:2px solid var(--bdr);border-radius:6px;padding:14px;margin-bottom:12px">`;
+      h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);letter-spacing:2px;margin-bottom:8px">注目馬</div>`;
+      const smc={'◎':'var(--red)','○':'var(--blu)','▲':'var(--grn)','穴':'var(--gld)','△':'var(--dim)'};
+      [ax,...ib.partners].forEach(p=>{
+        const mark=ib.mode==='SCORE'?(p.sMark||'○'):(p===ax?'◎':'○');
+        const desc=[];
+        if(p.prev?.[0])desc.push(`前走${p.prev[0].venue||''}${p.prev[0].dist||''}m ${p.prev[0].fin}着`);
+        if(p.statNs)desc.push(`6因子${p.statNs}`);
+        if(p.isAnaUma)desc.push(`穴因子${p.anaFactor}/5`);
+        h+=`<div style="font-size:13px;padding:3px 0;border-bottom:1px dashed var(--bdr)">
+          <span style="font-weight:900;color:${smc[mark]||'var(--dim)'}">${mark}</span>
+          <b>${p.num}</b> ${p.name}
+          <span style="font-size:11px;color:var(--dim)">${desc.join(' / ')}</span>
+        </div>`;
+      });
+      h+=`</div>`;
+    }
+
+    // --- 馬券別「的中条件チェック」（統合推奨の買い目を使用） ---
     h+=`<div style="background:var(--p2);border:2px solid var(--bdr);border-radius:6px;padding:14px;margin-bottom:12px">`;
     h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);letter-spacing:2px;margin-bottom:8px">的中条件チェック</div>`;
-    b.tickets.forEach(t=>{
-      const nums=t.horses?.map(h2=>h2.num)||[];
-      const names=t.horses?.map(h2=>{const sc=s.find(x=>x.num===h2.num);return sc?.name||h2.num+'番'})||[];
+    (ib.bets||[]).forEach(t=>{
+      const nums=t.desc.split('—').map(Number);
+      const names=nums.map(n=>{const sc=s?.find(x=>x.num===n);return sc?.name||n+'番'});
       let cond='';
       if(t.type==='単勝'){
         cond=`◎ ${names[0]}が1着でゴール`;
@@ -3746,7 +3765,7 @@ function renderDetail(id){
       }
       h+=`<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px dashed var(--bdr);font-size:13px;align-items:baseline">
         <span style="min-width:60px;font-weight:900;color:var(--grn)">${t.type}</span>
-        <span style="font-weight:700;color:var(--ink)">${t.desc}</span>
+        <span style="font-weight:700;color:var(--ink)">${t.desc}${t.note?'<span style=\"font-size:10px;color:var(--gld);margin-left:4px\">['+t.note+']</span>':''}</span>
         <span style="color:var(--dim);flex:1">${cond}</span>
       </div>`;
     });
