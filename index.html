@@ -1187,9 +1187,76 @@ hs.forEach(h=>{
   h.adjDetail=adjDetail;
   h.adjDelta=adj;
 });
+// 統計スコア（7因子）を全馬に付与
+hs.forEach(h=>{
+  const st=calcStatScore(h,inf);
+  h.statNs=st.score;
+  h.statRate=statScoreToRate(st.score);
+  h.statDetail=st.detail;
+});
+// 統計スコア順位を付与（人気の盲点判定用）
+const statSorted=[...hs].sort((a,b)=>b.statNs-a.statNs);
+statSorted.forEach((h,i)=>{h.statRank=i+1});
+// 人気の盲点フラグ: 人気4位以下 かつ 統計スコア3位以内
+hs.forEach(h=>{h.isBlindSpot=h.pop>=4&&h.statRank<=3});
 // 補正スコアでソート（印の割り当てに影響）
 hs.sort((a,b)=>b.adjScore-a.adjScore);
 return hs}
+
+// ===== 統計スコア（CLAUDE.md 7因子モデル: z検定p<0.01・月別再現性検証済み） =====
+const STAT_TOP9_JOCKEYS=['C.ルメール','Ｃ．ルメール','川田 将雅','戸崎 圭太','岩田 望来','R.キング','西村 淳也','坂井 瑠星','武 豊','松山 弘平'];
+function calcStatScore(h,raceInfo){
+  let s=0;const detail=[];
+  // ① 人気（+50〜-20）
+  const pop=h.pop||0;
+  if(pop===1){s+=50;detail.push('1人気+50')}
+  else if(pop===2){s+=33;detail.push('2人気+33')}
+  else if(pop===3){s+=23;detail.push('3人気+23')}
+  else if(pop===4){s+=14;detail.push('4人気+14')}
+  else if(pop===5){s+=6;detail.push('5人気+6')}
+  else if(pop>=6&&pop<=7){/* 0 */}
+  else if(pop>=8&&pop<=10){s-=10;detail.push('8-10人気-10')}
+  else if(pop>=11){s-=20;detail.push('11人気〜-20')}
+  // ② 騎手（TOP9: +15）
+  const jk=(h.jk||'').replace(/[\s　]+/g,' ').trim();
+  if(STAT_TOP9_JOCKEYS.some(j=>j.replace(/[\s　]+/g,' ')===jk)){s+=15;detail.push('TOP9騎手+15')}
+  // ③ 馬体重（+8〜-8）
+  const wt=h.wt||0;
+  if(wt>=520){s+=8;detail.push('520kg↑+8')}
+  else if(wt>=480){s+=5;detail.push('480kg↑+5')}
+  else if(wt>=460){s+=2}
+  else if(wt>0&&wt<440){s-=8;detail.push('440kg↓-8')}
+  // ④ 斤量（+5〜-8）
+  const imp=h.imp||0;
+  if(imp>=57){s+=5;detail.push('斤量57↑+5')}
+  else if(imp>0&&imp<54){s-=8;detail.push('斤量54↓-8')}
+  // ⑤ 枠順（芝1500m以上限定）
+  const course=raceInfo?.type||'';
+  const dist=raceInfo?.dist||0;
+  const gate=h.num||0;
+  if(course==='芝'&&dist>=1500&&gate>0){
+    if(gate<=4){s+=4;detail.push('内枠+4')}
+    else if(gate>=9){s-=3;detail.push('外枠-3')}
+  }
+  // ⑥ 性別（+3〜-3）
+  const sex=h.sex||'';
+  if(sex==='牡'){s+=3;detail.push('牡+3')}
+  else if(sex==='牝'){s-=3;detail.push('牝-3')}
+  // ⑦ 馬体重増減（+3〜-5）
+  const wc=h.wc;
+  if(wc!=null){
+    if(Math.abs(wc)<=3){s+=3;detail.push('体重安定+3')}
+    else if(Math.abs(wc)>=10){s-=5;detail.push('体重変動-5')}
+  }
+  return{score:s,detail};
+}
+// 統計スコア → 期待3着内率
+function statScoreToRate(s){
+  if(s>=71)return 77.8;if(s>=61)return 66.3;if(s>=51)return 60.0;
+  if(s>=41)return 51.1;if(s>=31)return 42.6;if(s>=21)return 33.7;
+  if(s>=11)return 25.5;if(s>=1)return 15.3;if(s>=-9)return 10.0;
+  return 4.4;
+}
 
 // ===== BET (v21: 単勝・馬連・ワイドの3択、レース質判定) =====
 function getHorseStatBonus(horse,raceInfo){
@@ -2597,7 +2664,8 @@ function downloadAllCSV(){
     '前走着順','前走頭数','前走着差','前走上がりタイム','前走間隔(週)',
     'スコア合計','補正スコア','補正値','印',
     '実際着順','3着以内','単勝オッズ','人気',
-    '実際上がりタイム','実際通過順位'];
+    '実際上がりタイム','実際通過順位',
+    '統計スコア','統計期待率','人気の盲点'];
   const rows=[];
   const sorted=[...RACES].filter(r=>(r.scored?.length>0)||(r.result?.allResults?.length>0)).sort((a,b)=>{
     const ka=a.sortKey||a.id,kb=b.sortKey||b.id;return ka<kb?-1:ka>kb?1:0;
@@ -2648,7 +2716,8 @@ function downloadAllCSV(){
         h.ns||'',h.adjNs!=null?h.adjNs:'',h.adjDelta||0,mark,
         actualRank,top3.length>=3?inTop3:'',
         h.odds||ar?.popularity?'':'',ar?.popularity||h._resultPopularity||'',
-        resLast3f,resPos
+        resLast3f,resPos,
+        h.statNs!=null?h.statNs:'',h.statRate!=null?h.statRate.toFixed(1):'',h.isBlindSpot?'盲点':''
       ]);
     });
   });
@@ -3257,6 +3326,53 @@ function renderDetail(id){
   if(!r.info.surf||!r.info.cond||!r.info.type){
     h+=`<div style="background:rgba(196,30,58,.08);border:2px solid var(--red);padding:10px 14px;margin-bottom:8px;border-radius:4px;font-size:13px;font-weight:700;color:var(--red)">⚠️ 馬場データ未入力 — ${!r.info.surf?'コース ':''}${!r.info.cond?'馬場状態 ':''}${!r.info.type?'芝/ダート ':''}が不足しています。予想精度が低下する可能性があります。</div>`;
   }
+  // === 統計スコア（7因子モデル）テーブル ===
+  if(s?.length>0){
+    const statRanked=[...s].sort((a,b)=>(b.statNs||0)-(a.statNs||0));
+    const venue=(r.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
+    h+=`<div class="pnl"><h3 class="b">📊 統計スコア（7因子モデル）</h3>`;
+    h+=`<div style="font-size:11px;color:var(--dim);margin-bottom:8px;line-height:1.5">z検定(p&lt;0.01)＋月別再現性を満たす7因子のみで算出。人気の盲点＝人気4位以下なのにスコア上位3位以内の馬。</div>`;
+    h+=`<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse;white-space:nowrap">`;
+    h+=`<tr style="background:var(--ink);color:var(--p)">
+      <th style="padding:5px 8px;text-align:center">順位</th>
+      <th style="padding:5px 8px;text-align:right">統計</th>
+      <th style="padding:5px 8px;text-align:right">期待率</th>
+      <th style="padding:5px 8px;text-align:center">馬番</th>
+      <th style="padding:5px 8px;text-align:left">馬名</th>
+      <th style="padding:5px 8px;text-align:center">人気</th>
+      <th style="padding:5px 8px;text-align:left">騎手</th>
+      <th style="padding:5px 8px;text-align:left">内訳</th>
+    </tr>`;
+    statRanked.forEach((x,i)=>{
+      const bg=x.isBlindSpot?'rgba(184,134,11,.12)':i<3?'rgba(45,106,48,.06)':i%2===0?'var(--p)':'var(--p2)';
+      const blindBadge=x.isBlindSpot?'<span style="background:#FAEEDA;color:#854F0B;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;font-weight:700">盲点</span>':'';
+      const blinkerBadge=getBlinkerBadge(x);
+      const condBadge=getSameCondBadge(x,r.info);
+      h+=`<tr style="background:${bg}">
+        <td style="padding:4px 8px;text-align:center;font-weight:900;color:${i<3?'var(--grn)':'var(--dim)'}">${i+1}</td>
+        <td style="padding:4px 8px;text-align:right;font-weight:900;color:var(--red)">${x.statNs||0}</td>
+        <td style="padding:4px 8px;text-align:right;font-weight:700;color:${x.statRate>=50?'var(--grn)':x.statRate>=25?'var(--gld)':'var(--dim)'}">${x.statRate?.toFixed(1)||'?'}%</td>
+        <td style="padding:4px 8px;text-align:center;font-weight:700">${x.num||''}</td>
+        <td style="padding:4px 8px;font-weight:700">${x.name||''}${blindBadge}${blinkerBadge}${condBadge}</td>
+        <td style="padding:4px 8px;text-align:center">${x.pop||''}</td>
+        <td style="padding:4px 8px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(x.jk||'').replace(/'/g,"\\'")}')">${x.jk||''}</span></td>
+        <td style="padding:4px 8px;font-size:10px;color:var(--dim)">${(x.statDetail||[]).join(' ')}</td>
+      </tr>`;
+    });
+    h+=`</table></div>`;
+    // 人気の盲点があれば強調
+    const blindSpots=statRanked.filter(x=>x.isBlindSpot);
+    if(blindSpots.length>0){
+      h+=`<div style="margin-top:8px;padding:8px 12px;background:rgba(184,134,11,.08);border:1px solid var(--gld);border-radius:4px;font-size:13px">`;
+      h+=`<b style="color:var(--gld)">⚡ 人気の盲点:</b> `;
+      h+=blindSpots.map(x=>`<b>${x.num}番 ${x.name}</b>（${x.pop}番人気→統計${x.statRank}位・期待率${x.statRate?.toFixed(1)}%）`).join('、');
+      h+=`<div style="font-size:11px;color:var(--dim);margin-top:4px">人気の盲点該当馬の実績3着内率: 32.5%（非該当の4番人気以下: 11.7%）</div>`;
+      h+=`</div>`;
+    }
+    h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px;line-height:1.5">※ 統計スコアの最大構成要素は人気（+50pt）のため、レース単位の的中率は人気順とほぼ同等（上位3頭で94.5%）。スコアの価値は「人気の盲点」の検出にあります。</div>`;
+    h+=`</div>`;
+  }
+
   // === レース観戦ガイド ===
   if(b&&!b.skipRecommended&&b.tickets?.length>0){
     const axisHorse=s?.[0];
