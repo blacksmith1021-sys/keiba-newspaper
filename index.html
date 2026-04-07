@@ -116,6 +116,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <nav class="nav" id="navBar">
 <button class="on" onclick="showView('input')">JRA取込</button>
 <button onclick="showView('list')">📋 予想<span id="countBadge"></span></button>
+<button onclick="showView('review')">📝 振り返り</button>
 <button onclick="showView('trends')">📊 統計</button>
 <button onclick="showView('sync')">☁️ 同期</button>
 </nav>
@@ -124,6 +125,7 @@ input[type="number"]:focus{outline:none;border-color:var(--blu);box-shadow:0 0 0
 <div id="vInput"></div>
 <div id="vList" class="hidden"></div>
 <div id="vDetail" class="hidden"></div>
+<div id="vReview" class="hidden"></div>
 <div id="vTrends" class="hidden"></div>
 <div id="vSync" class="hidden"></div>
 </div>
@@ -2426,12 +2428,13 @@ function updateTodaySummary(){
 }
 
 function showView(v){
-  ['vInput','vList','vDetail','vTrends','vSync'].forEach(id=>document.getElementById(id).className='hidden');
+  ['vInput','vList','vDetail','vReview','vTrends','vSync'].forEach(id=>document.getElementById(id).className='hidden');
   document.getElementById('v'+v.charAt(0).toUpperCase()+v.slice(1)).className='';
-  document.querySelectorAll('.nav button').forEach((b,i)=>{b.className=(['input','list','trends','sync'][i]===v)?'on':''});
+  document.querySelectorAll('.nav button').forEach((b,i)=>{b.className=(['input','list','review','trends','sync'][i]===v)?'on':''});
   if(v==='list')renderList();
   if(v==='trends')renderTrends();
   if(v==='detail'&&CUR)renderDetail(CUR);
+  if(v==='review')renderReview();
   if(v==='sync')renderSyncView();
   updatePhaseBanner();
   updateTodaySummary();
@@ -4089,6 +4092,113 @@ function clearTrendsFilter(){
   ['filterVenue','filterDist','filterSurf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});
   renderTrends();
 }
+// ===== v6 STEP 8: 振り返り機能 =====
+const REVIEW_MEMO_KEY='kfn_review_memos';
+function loadMemos(){try{return JSON.parse(localStorage.getItem(REVIEW_MEMO_KEY))||{}}catch{return{}}}
+function saveMemos(m){localStorage.setItem(REVIEW_MEMO_KEY,JSON.stringify(m))}
+function setReviewMemo(rid,memo){const m=loadMemos();if(memo){m[rid]=memo}else{delete m[rid]}saveMemos(m)}
+
+// レース1件から振り返りレコードを生成
+function generateReview(r){
+  if(!r||!r.scored||!r.result?.top3?.length)return null;
+  const v6=r.v6||(typeof computeV6==='function'?computeV6(r.scored,r.info):null);
+  const top3=r.result.top3.map(n=>+n);
+  const winnerNum=top3[0];
+  const winner=r.scored.find(h=>h.num===winnerNum);
+  const allRes=r.result.allResults||[];
+  const rankOf=n=>{const ar=allRes.find(a=>a.num===n);if(ar?.rank)return ar.rank;const i=top3.indexOf(n);return i>=0?i+1:null};
+  const axNum=v6?.picks?.axis;
+  const anNum=v6?.picks?.ana;
+  const ax=axNum?r.scored.find(h=>h.num===axNum):null;
+  const an=anNum?r.scored.find(h=>h.num===anNum):null;
+  const inv=getHitInfo(r).inv||0;
+  const ret=getHitInfo(r).ret||0;
+  return{
+    id:r.id,
+    日付:r.info?.date||'',
+    競馬場:(r.info?.course||'').replace(/\d+回/,'').replace(/\d+日/,''),
+    レース番号:r.info?.raceNum||'',
+    距離:r.info?.dist||0,
+    コース:r.info?.type||'',
+    分類:v6?.raceType||'?',
+    買い目:(v6?.bet?.bets||[]).map(b=>`${b.kind}${b.desc}`).join(' / '),
+    投資額:inv,
+    回収額:ret,
+    損益:ret-inv,
+    '◎の馬名':ax?.name||'',
+    '◎の結果':ax?`${ax.name} ${rankOf(ax.num)||'-'}着`:'',
+    '◎の根拠':ax?`${ax.pop||'?'}番人気 sf${ax.v6sf!=null?ax.v6sf:'-'}`:'',
+    '穴馬の結果':an?`${an.name} ${rankOf(an.num)||'-'}着`:'なし',
+    '勝馬':winner?`${winner.name}（${winner.pop||'?'}番人気）`:`${winnerNum}番`,
+    判定:ret>inv?'的中':'不的中',
+  };
+}
+
+function buildAllReviews(){
+  return RACES.filter(r=>r.result?.top3?.length>=3&&r.scored?.length).map(generateReview).filter(Boolean);
+}
+
+function renderReview(){
+  const reviews=buildAllReviews();
+  const memos=loadMemos();
+  let h='<div class="pnl"><h3 class="r">📝 振り返り（PDCA）</h3>';
+  if(reviews.length===0){
+    h+='<div style="font-size:12px;color:var(--dim);padding:20px;text-align:center">結果入力済みのレースがまだありません</div></div>';
+    document.getElementById('vReview').innerHTML=h;return;
+  }
+  // 日付ごとにグループ化
+  const byDate={};
+  reviews.forEach(rv=>{(byDate[rv.日付]=byDate[rv.日付]||[]).push(rv)});
+  const dates=Object.keys(byDate).sort().reverse();
+  // 全期間サマリー
+  const totalInv=reviews.reduce((s,r)=>s+r.投資額,0);
+  const totalRet=reviews.reduce((s,r)=>s+r.回収額,0);
+  const totalPnL=totalRet-totalInv;
+  const hitN=reviews.filter(r=>r.判定==='的中').length;
+  const roi=totalInv>0?(totalRet/totalInv*100).toFixed(1):'0.0';
+  // 直近30日
+  const today=new Date();today.setHours(0,0,0,0);
+  const ms30=30*86400000,ms7=7*86400000;
+  const inRange=(d,ms)=>{const p=(d||'').split('/');if(p.length!==3)return false;const t=new Date(+p[0],+p[1]-1,+p[2]).getTime();return today.getTime()-t<=ms};
+  const m30=reviews.filter(r=>inRange(r.日付,ms30));
+  const w7=reviews.filter(r=>inRange(r.日付,ms7));
+  const sumOf=(arr)=>{const i=arr.reduce((s,r)=>s+r.投資額,0),re=arr.reduce((s,r)=>s+r.回収額,0);return{i,re,p:re-i,roi:i>0?(re/i*100).toFixed(1):'0.0'}};
+  const w=sumOf(w7),m=sumOf(m30);
+
+  h+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0">
+    <div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center"><div style="font-size:11px;color:var(--dim)">今週(7日)</div><div style="font-size:18px;font-weight:900;color:${w.p>=0?'var(--grn)':'var(--red)'}">${w.p>=0?'+':''}${w.p.toLocaleString()}円</div><div style="font-size:11px;color:var(--dim)">回収率 ${w.roi}%</div></div>
+    <div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center"><div style="font-size:11px;color:var(--dim)">今月(30日)</div><div style="font-size:18px;font-weight:900;color:${m.p>=0?'var(--grn)':'var(--red)'}">${m.p>=0?'+':''}${m.p.toLocaleString()}円</div><div style="font-size:11px;color:var(--dim)">回収率 ${m.roi}%</div></div>
+    <div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center"><div style="font-size:11px;color:var(--dim)">累計</div><div style="font-size:18px;font-weight:900;color:${totalPnL>=0?'var(--grn)':'var(--red)'}">${totalPnL>=0?'+':''}${totalPnL.toLocaleString()}円</div><div style="font-size:11px;color:var(--dim)">回収率 ${roi}% / 的中${hitN}/${reviews.length}</div></div>
+  </div>`;
+  h+='</div>';
+
+  // 日付ごとの振り返り
+  dates.slice(0,30).forEach(d=>{
+    const rs=byDate[d];
+    const di=rs.reduce((s,r)=>s+r.投資額,0);
+    const dr=rs.reduce((s,r)=>s+r.回収額,0);
+    const dp=dr-di;
+    const dh=rs.filter(r=>r.判定==='的中').length;
+    h+=`<div class="pnl"><h3 class="b">📅 ${d} <span style="font-size:11px;color:var(--dim);margin-left:8px">${rs.length}R</span></h3>`;
+    h+=`<div style="font-size:13px;margin-bottom:8px">投資 ${di.toLocaleString()}円 / 回収 ${dr.toLocaleString()}円 / <b style="color:${dp>=0?'var(--grn)':'var(--red)'}">損益 ${dp>=0?'+':''}${dp.toLocaleString()}円</b> / 回収率 ${di>0?(dr/di*100).toFixed(1):'0'}% / 的中 ${dh}/${rs.length}</div>`;
+    rs.forEach(rv=>{
+      const isHit=rv.判定==='的中';
+      const cls=rv.分類==='SOLID'?'堅い':rv.分類==='UPSET'?'穴':rv.分類==='SKIP'?'見送り':rv.分類;
+      const memo=memos[rv.id]||'';
+      h+=`<div style="border-left:3px solid ${isHit?'var(--grn)':'var(--red)'};padding:8px 10px;margin:6px 0;background:var(--p2);border-radius:0 4px 4px 0">
+        <div style="font-size:13px;font-weight:700">${rv.競馬場} ${rv.レース番号}R [${cls}] ${isHit?'✅':'❌'}
+          <span style="font-size:11px;color:var(--dim);font-weight:400;margin-left:6px">投資${rv.投資額}円 → 回収${rv.回収額}円</span>
+        </div>
+        <div style="font-size:12px;color:var(--dim);margin-top:3px">買い目: ${rv.買い目||'-'}</div>
+        <div style="font-size:12px;color:var(--dim)">◎: ${rv['◎の結果']||'-'}（${rv['◎の根拠']||''}） / 穴: ${rv['穴馬の結果']||'-'} / 勝馬: ${rv['勝馬']||'-'}</div>
+        <div style="margin-top:6px"><input type="text" placeholder="教訓メモを入力..." value="${memo.replace(/"/g,'&quot;')}" onchange="setReviewMemo('${rv.id}',this.value);this.style.background='rgba(0,150,0,.1)'" style="width:100%;padding:5px 8px;border:1px solid var(--bdr);background:var(--p);font-size:12px;border-radius:3px"></div>
+      </div>`;
+    });
+    h+='</div>';
+  });
+  document.getElementById('vReview').innerHTML=h;
+}
+
 function renderTrends(){
   const t=getTrends();
   const f=getTrendsFilter();
