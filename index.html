@@ -1577,41 +1577,44 @@ function buildIntegratedBet(scored,raceInfo){
     }
   }
 
-  // ===== 馬券生成（v5: 最大300円、戦略B=穴込み3連複が最適） =====
+  // ===== v6 STEP6: 式別自動選択（レース3分類で分岐） =====
   if(picks.length===0)return{action:'SKIP',reason:'該当馬なし',bestEv:0,horses,mode};
   const axis=picks[0]; // ◎（必ず1-3番人気）
   const partner=picks[1]; // ○
   const ana=picks.find(p=>p.sMark==='穴');
-  const filler=picks[2]; // ▲（穴がいない場合のフォールバック）
   const bets=[];
 
-  if(!axis||!partner)return{action:'SKIP',reason:'該当馬不足',bestEv:0,horses,mode};
+  if(!axis)return{action:'SKIP',reason:'◎不在',bestEv:0,horses,mode};
 
-  // 1点目: ワイド ◎—○（安定収入、的中率29%）
-  const w1=[Math.min(axis.num,partner.num),Math.max(axis.num,partner.num)];
-  bets.push({type:'ワイド',cost:100,target:w1.join('—'),ev:0,desc:w1.join('—')});
+  // レース分類
+  const raceType=classifyRace(horses);
 
-  if(ana){
-    // ★戦略B: 穴馬あり → 回収率+11.8%の最適戦略
-    // 2点目: ワイド ◎—穴
-    const w2=[Math.min(axis.num,ana.num),Math.max(axis.num,ana.num)];
-    bets.push({type:'ワイド',cost:100,target:w2.join('—'),ev:0,desc:w2.join('—'),note:'穴狙い'});
-    // 3点目: 3連複 ◎—○—穴（★必ず3頭指定）
-    const trio=[axis.num,partner.num,ana.num].sort((a,b2)=>a-b2);
-    bets.push({type:'3連複',cost:100,target:trio.join('—'),ev:0,desc:trio.join('—'),note:'穴狙い'});
-  }else if(filler){
-    // 穴馬なし → 堅実パターン
-    // 2点目: ワイド ◎—▲
-    const w2=[Math.min(axis.num,filler.num),Math.max(axis.num,filler.num)];
-    bets.push({type:'ワイド',cost:100,target:w2.join('—'),ev:0,desc:w2.join('—')});
-    // 3点目: 3連複 ◎—○—▲
-    const trio=[axis.num,partner.num,filler.num].sort((a,b2)=>a-b2);
-    bets.push({type:'3連複',cost:100,target:trio.join('—'),ev:0,desc:trio.join('—')});
+  if(raceType==='SKIP'){
+    return{action:'SKIP',reason:'見送り（堅い条件なし/穴パターン馬なし）',raceType,horses,mode,bets:[]};
   }
-  // 合計: 最大300円
 
-  const strategy=ana?'戦略B（穴込み3連複）':'堅実（◎○▲）';
-  return{action:'BET',strategy,axis,partners:picks.slice(1),bets,horses,nEdge:0,nBet:picks.length,mode};
+  if(raceType==='SOLID'){
+    // 堅いレース: ワイド ◎—○ 100円のみ
+    if(!partner)return{action:'SKIP',reason:'○不在',raceType,horses,mode};
+    const w1=[Math.min(axis.num,partner.num),Math.max(axis.num,partner.num)];
+    bets.push({type:'ワイド',cost:100,target:w1.join('—'),ev:0,desc:w1.join('—'),note:'堅実'});
+  }else if(raceType==='UPSET'){
+    // 荒れ予兆: ワイド ◎—穴 100円
+    if(!ana)return{action:'SKIP',reason:'穴馬不在',raceType,horses,mode};
+    const w=[Math.min(axis.num,ana.num),Math.max(axis.num,ana.num)];
+    bets.push({type:'ワイド',cost:100,target:w.join('—'),ev:0,desc:w.join('—'),note:'穴狙い'});
+    // ◎sf>=20 なら馬連も追加
+    if((axis.statNs||0)>=20){
+      bets.push({type:'馬連',cost:100,target:w.join('—'),ev:0,desc:w.join('—'),note:'◎強い'});
+    }
+    // 穴馬が実績降格なら複勝も追加
+    if(ana.実績降格){
+      bets.push({type:'複勝',cost:100,target:String(ana.num),ev:0,desc:String(ana.num),note:'実績降格'});
+    }
+  }
+
+  const strategy=raceType==='SOLID'?'堅い（W1点）':'穴（W+α）';
+  return{action:'BET',strategy,raceType,axis,partners:picks.slice(1),bets,horses,nEdge:0,nBet:picks.length,mode};
 }
 
 // 後方互換: statScoreToRate（旧コードから参照される場合用）
