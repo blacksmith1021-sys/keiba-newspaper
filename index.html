@@ -1466,6 +1466,28 @@ function judgeHorse(h,raceInfo){
   return{verdict,ev,wr:adjWr,pr:adjPr,odds,oddsSrc,sf,prevScore,existing};
 }
 
+// ===== v6: 穴馬パターン検出（STEP 3） =====
+// 巻き返し: 前走人気<=5 && 前走着順>=4 && 今走人気>=6（好走率17%、平均の1.8倍）
+// 実績降格: 前走人気<=5 && 前走着順<=3 && 今走人気>=6（好走率23.5%、平均の2.6倍）
+// 隠れ末脚: 前走上がりrank<=3 && 今走人気>=6（好走率15.6%、平均の1.7倍）
+function detectPatterns(h){
+  h.巻き返し=false;h.実績降格=false;h.隠れ末脚=false;
+  const pop=h.pop||0;
+  if(pop<6)return;
+  const p=h.prev?.[0];
+  if(!p)return;
+  if(p.prevPop&&p.prevPop<=5&&p.fin>=4)h.巻き返し=true;
+  if(p.prevPop&&p.prevPop<=5&&p.fin>=1&&p.fin<=3)h.実績降格=true;
+  if(h._prevAgariRank&&h._prevAgariRank<=3)h.隠れ末脚=true;
+}
+// 全馬の前走上がりrankを算出してdetectPatternsを実行
+function applyPatterns(horses){
+  const withF3=horses.filter(h=>h.prev?.[0]?.f3).map(h=>({h,f3:h.prev[0].f3}));
+  withF3.sort((a,b)=>a.f3-b.f3);
+  withF3.forEach((x,i)=>{x.h._prevAgariRank=i+1});
+  horses.forEach(detectPatterns);
+}
+
 // --- レース推奨生成（モード自動切替: オッズあり→回収率 / なし→スコア） ---
 function buildIntegratedBet(scored,raceInfo){
   if(!scored||scored.length===0)return null;
@@ -1481,6 +1503,9 @@ function buildIntegratedBet(scored,raceInfo){
     return{...h,verdict:j.verdict,ev:j.ev,estWr:j.wr,estPr:j.pr,
       evOdds:j.odds,oddsSrc:j.oddsSrc,prevScore,intScore,sMark:'△',sLabel:'押さえ'};
   });
+
+  // v6 STEP3: 穴馬パターン検出（巻き返し/実績降格/隠れ末脚）
+  applyPatterns(horses);
 
   // ===== v5: 印の決定（◎は必ず1-3番人気から） =====
   const used=new Set();
