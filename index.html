@@ -1488,6 +1488,20 @@ function applyPatterns(horses){
   horses.forEach(detectPatterns);
 }
 
+// ===== v6: レース3分類（STEP 4） =====
+// SOLID: ◎sf>=20 かつ パターン馬なし → 堅いレース（W1点100円）
+// UPSET: パターン馬あり → 荒れ予兆（W+馬連+複勝 最大300円）
+// SKIP : それ以外 → 見送り
+function classifyRace(horses){
+  if(!horses||!horses.length)return'SKIP';
+  const fav1=horses.find(h=>h.pop===1);
+  const fav1_sf=fav1?(fav1.statNs||0):0;
+  const hasPattern=horses.some(h=>h.巻き返し||h.実績降格||h.隠れ末脚);
+  if(fav1_sf>=20&&!hasPattern)return'SOLID';
+  if(hasPattern)return'UPSET';
+  return'SKIP';
+}
+
 // --- レース推奨生成（モード自動切替: オッズあり→回収率 / なし→スコア） ---
 function buildIntegratedBet(scored,raceInfo){
   if(!scored||scored.length===0)return null;
