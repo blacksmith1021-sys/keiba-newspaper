@@ -4134,6 +4134,24 @@ function generateReview(r){
   };
 }
 
+// v6 STEP 9: 勝ちパターン自動検出（コース×距離帯×分類でROI集計）
+function detectWinPattern(reviews){
+  const buckets={};
+  const distBand=d=>!d?'?':d<1400?'短':d<1800?'マ':d<2200?'中':'長';
+  reviews.forEach(r=>{
+    const key=`${r.コース||'?'}_${distBand(r.距離)}_${r.分類||'?'}`;
+    if(!buckets[key])buckets[key]={key,inv:0,ret:0,n:0,hit:0};
+    buckets[key].inv+=r.投資額;
+    buckets[key].ret+=r.回収額;
+    buckets[key].n++;
+    if(r.判定==='的中')buckets[key].hit++;
+  });
+  return Object.values(buckets)
+    .filter(b=>b.n>=10&&b.inv>0&&b.ret/b.inv>=1.20)
+    .map(b=>({...b,roi:b.ret/b.inv*100,hitRate:b.hit/b.n*100}))
+    .sort((a,b)=>b.roi-a.roi);
+}
+
 function buildAllReviews(){
   return RACES.filter(r=>r.result?.top3?.length>=3&&r.scored?.length).map(generateReview).filter(Boolean);
 }
@@ -4170,6 +4188,15 @@ function renderReview(){
     <div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center"><div style="font-size:11px;color:var(--dim)">今月(30日)</div><div style="font-size:18px;font-weight:900;color:${m.p>=0?'var(--grn)':'var(--red)'}">${m.p>=0?'+':''}${m.p.toLocaleString()}円</div><div style="font-size:11px;color:var(--dim)">回収率 ${m.roi}%</div></div>
     <div style="background:var(--p2);padding:10px;border-radius:6px;text-align:center"><div style="font-size:11px;color:var(--dim)">累計</div><div style="font-size:18px;font-weight:900;color:${totalPnL>=0?'var(--grn)':'var(--red)'}">${totalPnL>=0?'+':''}${totalPnL.toLocaleString()}円</div><div style="font-size:11px;color:var(--dim)">回収率 ${roi}% / 的中${hitN}/${reviews.length}</div></div>
   </div>`;
+  // 勝ちパターン（STEP 9）
+  const wins=detectWinPattern(reviews);
+  if(wins.length>0){
+    h+='<div style="margin-top:10px;border-top:1px dashed var(--bdr);padding-top:10px"><div style="font-size:13px;font-weight:900;color:var(--grn);margin-bottom:6px">🏆 勝ちパターン（10R以上 & 回収率120%以上）</div>';
+    wins.slice(0,8).forEach(w=>{
+      h+=`<div style="font-size:12px;padding:4px 0;border-bottom:1px dashed var(--bdr)">${w.key} : ROI <b style="color:var(--grn)">${w.roi.toFixed(0)}%</b> / 的中率 ${w.hitRate.toFixed(0)}% / ${w.n}R / 損益 ${(w.ret-w.inv>=0?'+':'')}${(w.ret-w.inv).toLocaleString()}円</div>`;
+    });
+    h+='</div>';
+  }
   h+='</div>';
 
   // 日付ごとの振り返り
