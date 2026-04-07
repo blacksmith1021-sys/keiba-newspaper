@@ -4231,6 +4231,25 @@ function renderTrends(){
   const f=getTrendsFilter();
   let h='';
 
+  // === v6 STEP 10: レース分類別 ROI 比較 ===
+  const reviews6=(typeof buildAllReviews==='function')?buildAllReviews():[];
+  if(reviews6.length>0){
+    const byType={SOLID:{i:0,r:0,n:0,h:0},UPSET:{i:0,r:0,n:0,h:0},SKIP:{i:0,r:0,n:0,h:0}};
+    reviews6.forEach(rv=>{const b=byType[rv.分類];if(!b)return;b.i+=rv.投資額;b.r+=rv.回収額;b.n++;if(rv.判定==='的中')b.h++});
+    const tot={i:reviews6.reduce((s,r)=>s+r.投資額,0),r:reviews6.reduce((s,r)=>s+r.回収額,0)};
+    h+=`<div class="pnl" style="border:2px solid var(--blu)"><h3 class="b">📊 レース分類別 ROI（v6）</h3>
+    <table style="width:100%;font-size:13px;border-collapse:collapse">
+    <tr style="background:var(--ink);color:var(--p)"><th style="padding:6px">分類</th><th style="padding:6px">R数</th><th style="padding:6px">投資</th><th style="padding:6px">回収</th><th style="padding:6px">損益</th><th style="padding:6px">回収率</th><th style="padding:6px">的中率</th></tr>`;
+    [['SOLID','堅い','var(--blu)'],['UPSET','穴','var(--gld)'],['SKIP','見送り','var(--dim)']].forEach(([k,lbl,col])=>{
+      const b=byType[k];const roi=b.i>0?(b.r/b.i*100).toFixed(1):'-';const hr=b.n>0?(b.h/b.n*100).toFixed(0):'-';const pnl=b.r-b.i;
+      h+=`<tr><td style="padding:5px;text-align:center;font-weight:900;color:${col}">${lbl}</td><td style="padding:5px;text-align:center">${b.n}</td><td style="padding:5px;text-align:right">${b.i.toLocaleString()}</td><td style="padding:5px;text-align:right">${b.r.toLocaleString()}</td><td style="padding:5px;text-align:right;color:${pnl>=0?'var(--grn)':'var(--red)'};font-weight:700">${pnl>=0?'+':''}${pnl.toLocaleString()}</td><td style="padding:5px;text-align:right;font-weight:700;color:${b.i>0&&b.r/b.i>=1?'var(--grn)':'var(--red)'}">${roi}%</td><td style="padding:5px;text-align:right">${hr}%</td></tr>`;
+    });
+    h+=`</table>
+    <div style="font-size:11px;color:var(--dim);margin-top:6px">SOLIDは堅実な小額投資、UPSETは高配当狙い。両者の回収率を比較してバランスを評価。</div>
+    </div>`;
+  }
+
+
   // === 12,502走の統計サマリー（CLAUDE.md v3） ===
   h+=`<div class="pnl" style="border:2px solid var(--gld)">
   <h3 class="r">📊 統計根拠（12,502走分析 / 2026年1-4月 JRA全6場）</h3>
