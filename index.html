@@ -1548,8 +1548,10 @@ function buildIntegratedBet(scored,raceInfo){
     picks.push(tier3[0]);used.add(tier3[0].num);
   }
 
-  // 穴: 6番人気以下で穴因子4以上の最上位1頭
-  const tierAna=horses.filter(h=>(h.pop||99)>=6&&h.isAnaUma&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
+  // 穴: v6パターン馬の最有力（実績降格 > 巻き返し > 隠れ末脚）
+  const anaPicker=(pred)=>horses.filter(h=>pred(h)&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a))[0];
+  const anaCand=anaPicker(h=>h.実績降格)||anaPicker(h=>h.巻き返し)||anaPicker(h=>h.隠れ末脚);
+  const tierAna=anaCand?[anaCand]:[];
   if(tierAna.length>0&&picks.length<4){
     tierAna[0].sMark='穴';tierAna[0].sLabel='穴';
     picks.push(tierAna[0]);used.add(tierAna[0].num);
