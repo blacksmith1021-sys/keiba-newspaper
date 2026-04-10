@@ -2044,7 +2044,7 @@ function parseResult(text,horses){
     const re=new RegExp(pt+'\\s*\\n([\\s\\S]*?)(?='+payTypes.filter(x=>x!==pt).join('|')+'|$)');
     const pm=text.match(re);
     if(pm){
-      const allPay=[...pm[1].matchAll(/(\d[\d\-ー－―]+)\s+(\d[\d,]+)円/g)];
+      const allPay=[...pm[1].matchAll(/(\d+(?:[\-ー－―]\d+)*)\s+(\d[\d,]+)円/g)];
       payouts[pt]=allPay.map(m=>({combo:m[1],amount:parseInt(m[2].replace(/,/g,''))}));
     }
   });
