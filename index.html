@@ -2040,9 +2040,11 @@ function parseResult(text,horses){
   // === 4. 払戻金（全券種） ===
   let payouts={};
   const payTypes=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  const paySec=text.match(/払戻金[\s\S]*$/);
+  const payText=paySec?paySec[0]:text;
   payTypes.forEach(pt=>{
     const re=new RegExp(pt+'\\s*\\n([\\s\\S]*?)(?='+payTypes.filter(x=>x!==pt).join('|')+'|$)');
-    const pm=text.match(re);
+    const pm=payText.match(re);
     if(pm){
       const allPay=[...pm[1].matchAll(/(\d+(?:[\-ー－―]\d+)*)\s+(\d[\d,]+)円/g)];
       payouts[pt]=allPay.map(m=>({combo:m[1],amount:parseInt(m[2].replace(/,/g,''))}));
