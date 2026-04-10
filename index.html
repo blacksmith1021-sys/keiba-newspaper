@@ -1981,7 +1981,7 @@ function parseResult(text,horses){
     sm=fullText.match(/(?:牡|牝|せん)\d[\t\s]+\d+\.\d[\t\s]+([▲△☆◇★]?[^\t\d:（(][^\t:（(]*?)[\t]/);if(sm)jockey=sm[1].replace(/[▲△☆◇★]/g,'').trim();
     // 着差（タイムの後のトークン）
     sm=fullText.match(/\d:\d{2}\.\d[\t\s]+([\S]+)/);
-    if(sm&&!sm[1].match(/^\d|^枠|^[一-龥]/))margin=sm[1];
+    if(sm&&(!sm[1].match(/^\d|^枠|^[一-龥]/)||sm[1]==='大差'))margin=sm[1];
     
     // 通過順位・上がり・馬体重・調教師
     let positions=null,last3f=null,bodyWeight='',trainer='',popularity=0;
