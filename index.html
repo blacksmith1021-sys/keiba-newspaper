@@ -420,12 +420,17 @@ let _saveStatusTimer=null;
 function updateSyncBadge(){
   const el=document.getElementById('syncBadge');if(!el)return;
   const ls=loadSettings().lastSync;const lb=loadSettings().lastJsonBackup;
-  const gistOk=!!(getGhToken&&getGhToken()&&getGistId&&getGistId());
+  const token=getGhToken&&getGhToken();
+  const gistId=getGistId&&getGistId();
+  const gistOk=!!(token&&gistId);
+  const readOnly=!token&&!!gistId;
   let icon='',text='';
   if(gistOk&&ls){icon='☁️';text='同期: '+ls}
+  else if(gistOk){icon='☁️';text='同期設定済み'}
+  else if(readOnly){icon='📱';text='閲覧専用'}
   else if(lb){icon='💾';text='バックアップ: '+lb}
   else{icon='⚠️';text='未バックアップ'}
-  el.innerHTML=`<span>${icon}</span> <span style="color:${gistOk?'var(--grn)':lb?'var(--gld)':'var(--red)'}">${text}</span>`;
+  el.innerHTML=`<span>${icon}</span> <span style="color:${gistOk?'var(--grn)':readOnly?'var(--blu)':lb?'var(--gld)':'var(--red)'}">${text}</span>`;
 }
 
 function showSaveStatus(msg,type){
@@ -872,11 +877,9 @@ function detectPatternsV6(horse){
   const pop=horse.pop||horse._resultPopularity||0;
   const l=horse.prev?.[0];
   const prevPop=l?.prevPop||0;
-  // 穴馬は7-10人気に限定（統計: 11人気以降は複勝率7.4%以下で非効率）
-  const isAnaRange=pop>=7&&pop<=10;
-  horse.v6_巻き返し=(prevPop>=1&&prevPop<=5&&l&&l.fin>=4&&isAnaRange);
-  horse.v6_実績降格=(prevPop>=1&&prevPop<=5&&l&&l.fin<=3&&isAnaRange);
-  horse.v6_隠れ末脚=((l?.f3rank>=1&&l?.f3rank<=3&&isAnaRange)||(l?.f3&&l.f3>0&&l.f3<=35.5&&isAnaRange));
+  horse.v6_巻き返し=(prevPop>=1&&prevPop<=5&&l&&l.fin>=4&&pop>=6);
+  horse.v6_実績降格=(prevPop>=1&&prevPop<=5&&l&&l.fin<=3&&pop>=6);
+  horse.v6_隠れ末脚=((l?.f3rank>=1&&l?.f3rank<=3&&pop>=6)||(l?.f3&&l.f3>0&&l.f3<=35.5&&pop>=6));
   return horse.v6_巻き返し||horse.v6_実績降格||horse.v6_隠れ末脚;
 }
 function classifyRaceV6(horses,ri){
@@ -1037,21 +1040,20 @@ if(h.prev?.length>=2&&h.prev[0]?.fin&&h.prev[1]?.fin){
 
 // ===【条件適性】===
 
-// 距離変化（統計: 同距離26.8% > やや変更19-24% > 大幅変更12%）
+// 距離変化
 if(l?.dist&&dist){
   const dd=dist-l.dist;
-  const ad=Math.abs(dd);
-  if(ad===0){s+=fw('距離',10);f['距離']={v:'同距離',c:'g'}}
-  else if(ad<=200){s+=fw('距離',4);f['距離']={v:(dd>0?'+':'')+dd+'m',c:'n'}}
-  else if(ad<=400){s-=fw('距離',3);f['距離']={v:(dd>0?'+':'')+dd+'m',c:'b'}}
-  else{s-=fw('距離',8);f['距離']={v:(dd>0?'+':'')+dd+'m大幅変更',c:'b'}}
+  if(dd===0){s+=8;f['距離']={v:'同距離',c:'g'}}
+  else if(Math.abs(dd)<=200){s+=4;f['距離']={v:(dd>0?'+':'')+dd+'m',c:'n'}}
+  else if(dd>0){s-=2;f['距離']={v:'+'+dd+'m延長',c:'b'}}
+  else{s-=2;f['距離']={v:dd+'m短縮',c:'b'}}
 }
 
-// コース一致（統計: 同コース24.8% vs 替わり11.7%）
+// コース一致（芝/ダート）
 if(l?.surface){
   const surfKey=isDirt?'ダ':'芝';
   if(l.surface===surfKey){s+=5;f['コース']={v:(isDirt?'ダート':'芝')+'→'+(isDirt?'ダート':'芝')+'○',c:'g'}}
-  else{s-=12;f['コース']={v:(l.surface==='ダ'?'ダート':'芝')+'→'+(isDirt?'ダート':'芝')+'×',c:'b'}}
+  else{s-=5;f['コース']={v:(l.surface==='ダ'?'ダート':'芝')+'→'+(isDirt?'ダート':'芝')+'×',c:'b'}}
 }
 
 // 馬場一致（段階制: 良→稍重→重→不良）
@@ -1101,15 +1103,13 @@ if(raceDir&&h.prev?.length>0){
 
 // ===【状態】===
 
-// 馬体重変化（統計: ±0~+4が最良24.7%、-10以下は15.4%で危険）
+// 馬体重変化
 if(h.wc!=null){
-  const w=h.wc;
-  const aw=Math.abs(w);
-  if(w>=0&&w<=4){s+=4;f['体重']={v:'体重+'+w+'kg(最適)',c:'g'}}
-  else if(w>=-4&&w<0){s+=2;f['体重']={v:'体重'+w+'kg',c:'g'}}
-  else if(aw<=9){f['体重']={v:'体重'+(w>=0?'+':'')+w+'kg',c:'n'}}
-  else if(w<=-10){s-=6;f['体重']={v:'体重'+w+'kg注意',c:'b'}}
-  else{s-=3;f['体重']={v:'体重+'+w+'kg注意',c:'b'}}
+  const w=Math.abs(h.wc);
+  const label='体重'+(h.wc>=0?'+':'')+h.wc+'kg';
+  if(w<=4){s+=2;f['体重']={v:label,c:'g'}}
+  else if(w>=8){s-=3;f['体重']={v:label+'注意',c:'b'}}
+  else{f['体重']={v:label,c:'n'}}
 }
 
 // 間隔
@@ -1265,6 +1265,13 @@ if(h.num&&hs.length>=8){
   }
 }
 
+// RULE 7: 馬体重増減（微調整・既存の体重補正を補完）
+if(h.wc!=null){
+  if(h.wc>=2&&h.wc<=4)s+=2; // 微増が最も好成績
+  else if(h.wc<=-12)s-=3;   // 大幅減は危険信号
+  else if(h.wc>=12)s-=2;    // 大幅増も注意
+}
+
 // RULE 8: 性齢補正
 if(h.sex&&h.age){
   if(h.sex==='牡'&&h.age===4)s+=3;       // 牡4歳が最充実
@@ -1284,21 +1291,17 @@ const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.sco
 // ===== v2.9: 予測精度向上補正（11,446出走データに基づく） =====
 // 騎手リスク補正（高スコア馬騎乗時の複勝率ベースライン77.7%との乖離）
 const JOCKEY_RISK={
-'C.ルメール':+8,'Ｃ．ルメール':+8,'R.キング':+7,'北村友一':+7,
-'川田将雅':+7,'戸崎圭太':+6,'横山武史':+6,'岩田望来':+6,
-'坂井瑠星':+4,'津村明秀':+4,'幸英明':+4,'武豊':+3,
-'丹内祐次':+3,'松山弘平':+3,'三浦皇成':+3,'岩田康誠':+3,
-'横山典弘':+2,'丸山元気':+2,'角田大和':+2,'西村淳也':+2,
-'荻野極':+1,'菱田裕二':+1,'横山和生':+1,
-'吉田隼人':0,'佐々木大輔':0,'菅原明良':0,'横山琉人':0,
-'藤岡佑介':0,'鮫島克駿':0,'池添謙一':0,
-'団野大成':-1,'斎藤新':-2,'田辺裕信':-2,'吉村誠之助':-2,
-'浜中俊':-3,'酒井学':-3,'田口貫太':-3,'西塚洸二':-3,
-'古川奈穂':-4,'菊沢一樹':-4,'小崎綾也':-4,
-'松若風馬':-5,'石神深道':-5,'田山旺佑':-5,
-'大野拓弥':-6,'松岡正海':-6,'石川裕紀人':-6,
-'和田陽希':-7,'国分優作':-8,'江田照男':-8,
-'佐藤翔馬':-10,'石田拓郎':-8
+'松若風馬':+6,'松山弘平':+6,'C.ルメール':+6,'Ｃ．ルメール':+6,'川田将雅':+5,
+'岩田望来':+5,'西村淳也':+5,'角田大和':+4,'横山典弘':+4,'丸山元気':+4,
+'坂井瑠星':+4,'戸崎圭太':+3,'横山武史':+3,'田辺裕信':+3,'武豊':+3,
+'佐々木大輔':+2,'横山和生':+2,'吉田隼人':+2,'荻野極':+2,'菱田裕二':+2,
+'富田暁':+2,'藤岡佑介':+2,'R.キング':+2,'鮫島克駿':+1,'池添謙一':+1,
+'津村明秀':0,'菅原明良':0,'横山琉人':0,'吉村誠之助':0,
+'団野大成':-2,'北村友一':-2,'田口貫太':-3,'西塚洸二':-3,'丹内祐次':-3,
+'岩田康誠':-3,'斎藤新':-4,'酒井学':-4,'浜中俊':-4,
+'幸英明':-5,'三浦皇成':-5,'菊沢一樹':-5,'小崎綾也':-5,
+'石川裕紀人':-6,'大野拓弥':-8,'松岡正海':-8,'江田照男':-9,
+'小林美駒':-9,'和田陽希':-10,'国分優作':-13
 };
 // 競馬場バイアス補正
 const VENUE_BIAS={'東京':+3,'小倉':+1,'中京':+1,'京都':0,'阪神':-1,'中山':-1};
@@ -1681,9 +1684,6 @@ function genBet(scored,raceInfo,marketOdds){
   // 出走頭数が少ない
   if(headCount<=6){raceQuality.score-=30;raceQuality.reasons.push('少頭数（'+headCount+'頭）')}
   else if(headCount<=8){raceQuality.score-=15;raceQuality.reasons.push('小頭数（'+headCount+'頭）')}
-  // 頭数補正（統計: 少頭数ほど高スコア馬が活きる）
-  if(headCount<=10){raceQuality.score+=10;raceQuality.reasons.push('少頭数有利('+headCount+'頭)')}
-  else if(headCount>=17){raceQuality.score-=8;raceQuality.reasons.push('多頭数('+headCount+'頭)予測精度低下')}
 
   // 各馬に推定オッズ・期待値を付与
   scored.forEach(h=>{
@@ -1717,23 +1717,6 @@ function genBet(scored,raceInfo,marketOdds){
 
   // スコア1位の絶対値が低い（全馬の実力が僅差）
   if(scored[0]?.ns<60){raceQuality.score-=15;raceQuality.reasons.push('スコア低(top:'+scored[0]?.ns+')')}
-
-  // 補正スコアと統計スコアの乖離チェック（統計: 乖離時の着外リスク高）
-  const topHorse=scored[0];
-  if(topHorse){
-    const adjNs=topHorse.adjNs||topHorse.ns||0;
-    const statNs=topHorse.statNs||0;
-    // 補正スコアが高い（80+）のに統計スコアが低い（5以下）→過信リスク
-    if(adjNs>=80&&statNs<=5){
-      raceQuality.score-=12;
-      raceQuality.reasons.push('軸馬スコア乖離(補正'+adjNs+'/統計'+statNs+')');
-    }
-    // 両方高い（補正80+ & 統計20+）→高信頼
-    else if(adjNs>=80&&statNs>=20){
-      raceQuality.score+=8;
-      raceQuality.reasons.push('軸馬高信頼(補正'+adjNs+'/統計'+statNs+')');
-    }
-  }
 
   // レース質判定：-40以下で見送り
   const poorRace=raceQuality.score<=-40;
@@ -2062,6 +2045,7 @@ function parseResult(text,horses){
   // === 4. 払戻金（全券種） ===
   let payouts={};
   const payTypes=['単勝','複勝','枠連','ワイド','馬連','馬単','3連複','3連単'];
+  // 「払戻金」ヘッダー以降のテキストに絞る（着順テーブルヘッダーの「単勝」誤マッチを防止）
   const paySec=text.match(/払戻金[\s\S]*$/);
   const payText=paySec?paySec[0]:text;
   payTypes.forEach(pt=>{
@@ -3764,32 +3748,57 @@ function renderDetail(id){
     h+=`<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse;white-space:nowrap">`;
     h+=`<tr style="background:var(--ink);color:var(--p)"><th style="padding:5px 4px">印</th><th style="padding:5px 4px">枠</th><th style="padding:5px 4px">番</th><th style="padding:5px 4px;text-align:left">馬名</th><th style="padding:5px 4px">性齢</th><th style="padding:5px 4px">斤量</th><th style="padding:5px 4px;text-align:left">騎手</th><th style="padding:5px 4px">ｵｯｽﾞ</th><th style="padding:5px 4px">人気</th><th style="padding:5px 4px">6因子</th><th style="padding:5px 4px">前走S</th><th style="padding:5px 4px">パターン</th><th style="padding:5px 4px;text-align:left">前走成績</th></tr>`;
     const mc6={'◎':'var(--red)','○':'var(--blu)','穴':'var(--gld)','△':'var(--dim)'};
-    const wakuBg={1:'#fff',2:'#222',3:'#c41e3a',4:'#1a4488',5:'#d4a800',6:'#2d6a30',7:'#e06000',8:'#e87ba8'};
-    const wakuFg={1:'#222',2:'#fff',3:'#fff',4:'#fff',5:'#222',6:'#fff',7:'#fff',8:'#fff'};
+    const wakuColor={1:'#fff',2:'#000',3:'#c00',4:'#06c',5:'#fc0',6:'#0a0',7:'#f80',8:'#f6c'};
+    const wakuBg={1:'#fff',2:'#000',3:'#c00',4:'#06c',5:'#fc0',6:'#0a0',7:'#f80',8:'#fcc'};
+    const wakuFg={1:'#000',2:'#fff',3:'#fff',4:'#fff',5:'#000',6:'#fff',7:'#fff',8:'#000'};
     [...s].sort((a,b)=>(a.pop||99)-(b.pop||99)).forEach((x,i)=>{
       const sf6=x.v6sf!=null?x.v6sf:calcSixFactorV6(x,r.info).score;
       const pv6=x.v6prev!=null?x.v6prev:(calcPrevScoreV6(x,r.info)||'');
       const mk=x.v6mark||'△';
       const pt=[];if(x.v6_実績降格)pt.push('実績降格');if(x.v6_巻き返し)pt.push('巻き返し');if(x.v6_隠れ末脚)pt.push('隠れ末脚');
       const bg=mk==='◎'?'rgba(196,30,58,.06)':mk==='○'?'rgba(26,68,136,.06)':mk==='穴'?'rgba(184,134,11,.08)':i%2===0?'var(--p)':'var(--p2)';
+      // 前走情報
+      const lp=x.prev?.[0];
+      let prevStr='—';
+      if(lp){
+        const fin=lp.fin!=null?lp.fin+'着':'';
+        const run=lp.run?'/'+lp.run+'頭':'';
+        const dist=lp.dist||'';
+        const surf=lp.surface==='ダ'?'ダ':lp.surface==='芝'?'芝':'';
+        const cond=lp.cond||'';
+        const tm=lp.time||'';
+        const venue=lp.venue||'';
+        const f3=lp.f3?'上'+lp.f3:'';
+        prevStr=`<span style="font-weight:700;color:${lp.fin<=3?'var(--red)':lp.fin<=5?'var(--blu)':'var(--dim)'}">${fin}</span>${run} ${venue}${dist}${surf}${cond?'('+cond+')':''} ${tm} ${f3}`;
+      }
+      // 性齢
+      const sexAge=(x.sex||'')+(x.age||'');
+      // 斤量
+      const imp=x.imp||'';
+      // オッズ
+      const oddsStr=x.odds?x.odds.toFixed(1):'';
+      // 枠番
       const wk=x.waku||'';
       const wBg=wakuBg[wk]||'var(--p2)';
       const wFg=wakuFg[wk]||'var(--ink)';
-      const sexAge=(x.sex||'')+(x.age||'');
-      const imp=x.imp?x.imp.toFixed(1):'';
-      const oddsColor=x.odds<5?'var(--red)':x.odds<10?'var(--blu)':'var(--dim)';
-      const oddsStr=x.odds?x.odds.toFixed(1):'';
-      const blMark=x.bl?'<span style="font-size:9px;color:var(--red);font-weight:700;margin-left:1px">B</span>':'';
-      const pv0=x.prev&&x.prev[0]?x.prev[0]:null;
-      let prevStr='';
-      if(pv0){
-        const finColor=pv0.fin<=3?'var(--red)':pv0.fin<=5?'var(--blu)':'var(--dim)';
-        prevStr=`<span style="color:${finColor};font-weight:700">${pv0.fin}</span>/${pv0.run}着 ${pv0.venue||''} ${pv0.dist||''}${pv0.surface||''}${pv0.cond?'('+pv0.cond+')':''} ${pv0.time||''} ${pv0.f3?'上'+pv0.f3:''}`;
-      }
-      h+=`<tr style="background:${bg}"><td style="padding:3px 4px;text-align:center;font-weight:900;font-size:14px;color:${mc6[mk]}">${mk}</td><td style="padding:3px 4px;text-align:center"><span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;border-radius:3px;background:${wBg};color:${wFg};font-weight:900;font-size:11px;border:1px solid #888">${wk}</span></td><td style="padding:3px 4px;text-align:center;font-weight:700">${x.num||''}</td><td style="padding:3px 4px;font-weight:700">${x.name||''}${blMark}</td><td style="padding:3px 4px;text-align:center;font-size:11px">${sexAge}</td><td style="padding:3px 4px;text-align:center;font-size:11px">${imp}</td><td style="padding:3px 4px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(x.jk||'').replace(/'/g,"\\'")}')">${x.jk||''}</span></td><td style="padding:3px 4px;text-align:right;font-weight:700;color:${oddsColor}">${oddsStr}</td><td style="padding:3px 4px;text-align:center">${x.pop||''}</td><td style="padding:3px 4px;text-align:center;font-weight:700;color:${sf6>=20?'var(--grn)':sf6>=10?'var(--gld)':'var(--dim)'}">${sf6}</td><td style="padding:3px 4px;text-align:center;color:${pv6>=25?'var(--grn)':'var(--dim)'}">${pv6!=null?pv6:'—'}</td><td style="padding:3px 4px;text-align:center;font-size:11px;color:var(--gld);font-weight:700">${pt.join(' ')}</td><td style="padding:3px 4px;font-size:11px">${prevStr}</td></tr>`;
+      h+=`<tr style="background:${bg}">`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-weight:900;font-size:14px;color:${mc6[mk]}">${mk}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center"><span style="display:inline-block;width:20px;height:20px;line-height:20px;border-radius:3px;font-size:11px;font-weight:700;background:${wBg};color:${wFg};text-align:center;border:1px solid #ccc">${wk}</span></td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-weight:700">${x.num||''}</td>`;
+      h+=`<td style="padding:3px 4px;font-weight:700">${x.name||''}${x.bl?'<span style="font-size:9px;color:var(--gld);margin-left:2px">B</span>':''}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-size:11px;color:var(--dim)">${sexAge}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-size:11px">${imp}</td>`;
+      h+=`<td style="padding:3px 4px;font-size:11px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(x.jk||'').replace(/'/g,"\\'")}')">${x.jk||''}</span></td>`;
+      h+=`<td style="padding:3px 4px;text-align:right;font-weight:700;color:${x.odds&&x.odds<5?'var(--red)':x.odds&&x.odds<10?'var(--blu)':'var(--dim)'}">${oddsStr}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center">${x.pop||''}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-weight:700;color:${sf6>=20?'var(--grn)':sf6>=10?'var(--gld)':'var(--dim)'}">${sf6}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;color:${pv6>=25?'var(--grn)':'var(--dim)'}">${pv6!=null?pv6:'—'}</td>`;
+      h+=`<td style="padding:3px 4px;text-align:center;font-size:10px;color:var(--gld);font-weight:700">${pt.join(' ')}</td>`;
+      h+=`<td style="padding:3px 4px;font-size:11px">${prevStr}</td>`;
+      h+=`</tr>`;
     });
     h+=`</table></div>`;
-    h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
+    h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走S(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
     h+=`</div>`;
     h+=`<div style="font-size:11px;color:var(--dim);padding:6px 12px;background:var(--p2);border-radius:4px;margin-bottom:8px">
       <b>投資ルール:</b> 堅い=W1点100円 / 穴=最大W+馬連+複勝300円 / 見送り=0円 / 1日損失上限-5,000円
@@ -4648,9 +4657,9 @@ function setLastSync(t){const s=loadSettings();s.lastSync=t;saveSettings(s)}
 
 // --- Gist API helpers ---
 async function gistGet(gistId,token){
-  const res=await fetch(`${GH_API}/gists/${gistId}`,{
-    headers:{'Authorization':`token ${token}`,'Accept':'application/vnd.github.v3+json'}
-  });
+  const headers={'Accept':'application/vnd.github.v3+json'};
+  if(token)headers['Authorization']='token '+token;
+  const res=await fetch(`${GH_API}/gists/${gistId}`,{headers});
   if(res.status===404)return null;
   if(!res.ok)throw new Error(`Gist GET ${res.status}: ${(await res.json()).message}`);
   return await res.json();
@@ -4710,13 +4719,13 @@ async function scheduleGistSync(){
   },2000);
 }
 
-// --- Gist自動復元: ローカルデータが空でトークン+GistIDがあれば自動取得 ---
+// --- Gist自動復元: GistIDがあればトークン不要で読み取り復元 ---
 async function autoRestoreFromGithub(){
   const token=await restoreGhToken();
   const gistId=await restoreGistId();
-  if(!token||!gistId)return false;
+  if(!gistId)return false;
   try{
-    const gist=await gistGet(gistId,token);
+    const gist=await gistGet(gistId,token||'');
     if(!gist)return false;
     const rJson=gistParseFile(gist,'races.json');
     const hJson=gistParseFile(gist,'horse_store.json');
@@ -4795,7 +4804,7 @@ function renderSyncView(){
 <h3 class="b">☁️ Gistクラウド同期</h3>
 <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.7">
 レースデータ・馬DBをGitHub Gist（シークレット）にバックアップします。<br>
-${gistConnected?'<b style="color:var(--grn)">復元用URL:</b> <code style="font-size:10px;word-break:break-all;user-select:all">'+location.href+'</code><br><span style="font-size:11px">↑ このURLをブックマークすれば、キャッシュを全削除してもデータを復元できます。</span>':'設定後にGist IDがURLに埋め込まれます。そのURLをブックマークしてください。'}
+${gistConnected?'<b style="color:var(--grn)">復元用URL:</b> <code style="font-size:10px;word-break:break-all;user-select:all">'+location.href+'</code><br><span style="font-size:11px">↑ このURLをブックマークすれば、キャッシュを全削除してもデータを復元できます。</span><div style="margin-top:8px;padding:8px;background:rgba(26,68,136,.06);border:1px solid var(--blu);border-radius:4px"><div style="font-weight:700;font-size:12px;color:var(--blu);margin-bottom:4px">📱 スマホで閲覧</div><div style="font-size:11px;color:var(--dim);line-height:1.6">上のURLをスマホに送るだけで、トークンなしでデータを閲覧できます。<br>（閲覧専用・データの編集や同期はできません）</div><button class="btn btn-s" style="margin-top:6px" onclick="navigator.clipboard.writeText(location.href).then(()=>this.textContent=\'✅ コピー済み\')">📋 URLをコピー</button></div>':'設定後にGist IDがURLに埋め込まれます。そのURLをブックマークしてください。'}
 </div>
 <div style="margin-bottom:8px"><b style="font-size:13px">GitHub Personal Access Token:</b></div>
 <input type="password" class="sync-url" id="ghTokenInput" value="${token}" placeholder="ghp_xxxxx（gistスコープ必須）">
@@ -5061,10 +5070,13 @@ async function doGhLoad(){
   // 2. Gist自動復元（ローカルが空の場合のみ）
   const ghRestored=await autoRestoreFromGithub();
   if(ghRestored){
+    const isReadOnly=!getGhToken();
     const banner=document.createElement('div');
-    banner.style.cssText='position:fixed;top:0;left:0;right:0;background:var(--grn);color:#fff;text-align:center;padding:10px;font-size:13px;font-weight:700;z-index:9999;';
-    banner.textContent='✅ Gistからデータを自動復元しました（'+RACES.length+'レース）';
-    document.body.prepend(banner);setTimeout(()=>banner.remove(),4000);
+    banner.style.cssText='position:fixed;top:0;left:0;right:0;background:'+(isReadOnly?'var(--blu)':'var(--grn)')+';color:#fff;text-align:center;padding:10px;font-size:13px;font-weight:700;z-index:9999;';
+    banner.textContent=isReadOnly
+      ?'📱 Gistからデータを読み込みました（'+RACES.length+'レース）— 閲覧専用'
+      :'✅ Gistからデータを自動復元しました（'+RACES.length+'レース）';
+    document.body.prepend(banner);setTimeout(()=>banner.remove(),5000);
   }
   // 3. 起動時に全レースをv2スコアリングで再計算（バージョンフラグで制御）
   const SCORE_VER='v6.0.0';
