@@ -3740,15 +3740,31 @@ function renderDetail(id){
     // 全馬一覧
     h+=`<div class="pnl"><h3 class="b">全馬一覧</h3>`;
     h+=`<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse;white-space:nowrap">`;
-    h+=`<tr style="background:var(--ink);color:var(--p)"><th style="padding:5px 6px">印</th><th style="padding:5px 6px">番</th><th style="padding:5px 6px;text-align:left">馬名</th><th style="padding:5px 6px">人気</th><th style="padding:5px 6px">6因子</th><th style="padding:5px 6px">前走</th><th style="padding:5px 6px">パターン</th><th style="padding:5px 6px;text-align:left">騎手</th></tr>`;
+    h+=`<tr style="background:var(--ink);color:var(--p)"><th style="padding:5px 4px">印</th><th style="padding:5px 4px">枠</th><th style="padding:5px 4px">番</th><th style="padding:5px 4px;text-align:left">馬名</th><th style="padding:5px 4px">性齢</th><th style="padding:5px 4px">斤量</th><th style="padding:5px 4px;text-align:left">騎手</th><th style="padding:5px 4px">ｵｯｽﾞ</th><th style="padding:5px 4px">人気</th><th style="padding:5px 4px">6因子</th><th style="padding:5px 4px">前走S</th><th style="padding:5px 4px">パターン</th><th style="padding:5px 4px;text-align:left">前走成績</th></tr>`;
     const mc6={'◎':'var(--red)','○':'var(--blu)','穴':'var(--gld)','△':'var(--dim)'};
+    const wakuBg={1:'#fff',2:'#222',3:'#c41e3a',4:'#1a4488',5:'#d4a800',6:'#2d6a30',7:'#e06000',8:'#e87ba8'};
+    const wakuFg={1:'#222',2:'#fff',3:'#fff',4:'#fff',5:'#222',6:'#fff',7:'#fff',8:'#fff'};
     [...s].sort((a,b)=>(a.pop||99)-(b.pop||99)).forEach((x,i)=>{
       const sf6=x.v6sf!=null?x.v6sf:calcSixFactorV6(x,r.info).score;
       const pv6=x.v6prev!=null?x.v6prev:(calcPrevScoreV6(x,r.info)||'');
       const mk=x.v6mark||'△';
       const pt=[];if(x.v6_実績降格)pt.push('実績降格');if(x.v6_巻き返し)pt.push('巻き返し');if(x.v6_隠れ末脚)pt.push('隠れ末脚');
       const bg=mk==='◎'?'rgba(196,30,58,.06)':mk==='○'?'rgba(26,68,136,.06)':mk==='穴'?'rgba(184,134,11,.08)':i%2===0?'var(--p)':'var(--p2)';
-      h+=`<tr style="background:${bg}"><td style="padding:3px 6px;text-align:center;font-weight:900;font-size:14px;color:${mc6[mk]}">${mk}</td><td style="padding:3px 6px;text-align:center;font-weight:700">${x.num||''}</td><td style="padding:3px 6px;font-weight:700">${x.name||''}</td><td style="padding:3px 6px;text-align:center">${x.pop||''}</td><td style="padding:3px 6px;text-align:center;font-weight:700;color:${sf6>=20?'var(--grn)':sf6>=10?'var(--gld)':'var(--dim)'}">${sf6}</td><td style="padding:3px 6px;text-align:center;color:${pv6>=25?'var(--grn)':'var(--dim)'}">${pv6!=null?pv6:'—'}</td><td style="padding:3px 6px;text-align:center;font-size:11px;color:var(--gld);font-weight:700">${pt.join(' ')}</td><td style="padding:3px 6px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(x.jk||'').replace(/'/g,"\\'")}')">${x.jk||''}</span></td></tr>`;
+      const wk=x.waku||'';
+      const wBg=wakuBg[wk]||'var(--p2)';
+      const wFg=wakuFg[wk]||'var(--ink)';
+      const sexAge=(x.sex||'')+(x.age||'');
+      const imp=x.imp?x.imp.toFixed(1):'';
+      const oddsColor=x.odds<5?'var(--red)':x.odds<10?'var(--blu)':'var(--dim)';
+      const oddsStr=x.odds?x.odds.toFixed(1):'';
+      const blMark=x.bl?'<span style="font-size:9px;color:var(--red);font-weight:700;margin-left:1px">B</span>':'';
+      const pv0=x.prev&&x.prev[0]?x.prev[0]:null;
+      let prevStr='';
+      if(pv0){
+        const finColor=pv0.fin<=3?'var(--red)':pv0.fin<=5?'var(--blu)':'var(--dim)';
+        prevStr=`<span style="color:${finColor};font-weight:700">${pv0.fin}</span>/${pv0.run}着 ${pv0.venue||''} ${pv0.dist||''}${pv0.surface||''}${pv0.cond?'('+pv0.cond+')':''} ${pv0.time||''} ${pv0.f3?'上'+pv0.f3:''}`;
+      }
+      h+=`<tr style="background:${bg}"><td style="padding:3px 4px;text-align:center;font-weight:900;font-size:14px;color:${mc6[mk]}">${mk}</td><td style="padding:3px 4px;text-align:center"><span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;border-radius:3px;background:${wBg};color:${wFg};font-weight:900;font-size:11px;border:1px solid #888">${wk}</span></td><td style="padding:3px 4px;text-align:center;font-weight:700">${x.num||''}</td><td style="padding:3px 4px;font-weight:700">${x.name||''}${blMark}</td><td style="padding:3px 4px;text-align:center;font-size:11px">${sexAge}</td><td style="padding:3px 4px;text-align:center;font-size:11px">${imp}</td><td style="padding:3px 4px"><span class="jk-apt-trigger" onclick="showJkAptPopup(event,'${(x.jk||'').replace(/'/g,"\\'")}')">${x.jk||''}</span></td><td style="padding:3px 4px;text-align:right;font-weight:700;color:${oddsColor}">${oddsStr}</td><td style="padding:3px 4px;text-align:center">${x.pop||''}</td><td style="padding:3px 4px;text-align:center;font-weight:700;color:${sf6>=20?'var(--grn)':sf6>=10?'var(--gld)':'var(--dim)'}">${sf6}</td><td style="padding:3px 4px;text-align:center;color:${pv6>=25?'var(--grn)':'var(--dim)'}">${pv6!=null?pv6:'—'}</td><td style="padding:3px 4px;text-align:center;font-size:11px;color:var(--gld);font-weight:700">${pt.join(' ')}</td><td style="padding:3px 4px;font-size:11px">${prevStr}</td></tr>`;
     });
     h+=`</table></div>`;
     h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
