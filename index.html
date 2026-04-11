@@ -2265,10 +2265,25 @@ function analyzeLoss(rd,top3){
   if(!top3||top3.length<3)return[];
   const bt=rd.bet;
   let betNums=[];
-  if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
-  else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
-  else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
-  if(betNums.length<2)return['買い目なし'];
+  // V6買い目を優先（画面に表示される「統合推奨馬券」がV6）
+  if(rd.v6?.bet?.bets?.length>0){
+    const v6Nums=new Set();
+    rd.v6.bet.bets.forEach(vb=>(vb.horses||[]).forEach(n=>v6Nums.add(n)));
+    betNums=[...v6Nums];
+  }
+  // V6がなければチケットベースの買い目
+  if(betNums.length<2&&bt?.tickets?.length>0){
+    const tkNums=new Set();
+    bt.tickets.forEach(tk=>(tk.horses||[]).forEach(h=>tkNums.add(h.num)));
+    if(tkNums.size>=1)betNums=[...tkNums];
+  }
+  // それでもなければ従来のbest.horses
+  if(betNums.length<2){
+    if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
+    else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
+    else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
+  }
+  if(betNums.length<1)return['買い目なし'];
   
   const t3=top3.map(n=>+n);
   const sc=rd.scored;const fH=n=>sc.find(h=>h.num===n);
@@ -2282,10 +2297,13 @@ function analyzeLoss(rd,top3){
   const reasons=[];
   
   if(inTop3.length===1){
+    const hitN=betNums.find(n=>t3.includes(n));
     const missN=betNums.find(n=>!t3.includes(n));
-    const mh=fH(missN);
-    if(mh)reasons.push(mh.num+'番'+mh.name+'が圏外（相手選びが課題）');
-    reasons.push('1頭は3着以内→相手の精度向上が課題');
+    const hh=fH(hitN);const mh=fH(missN);
+    const hitRank=t3.indexOf(hitN)+1;
+    if(hh)reasons.push(hh.num+'番'+hh.name+'は'+hitRank+'着に好走 ○');
+    if(mh)reasons.push('相手 '+mh.num+'番'+mh.name+'が'+((fH(missN)&&rd.result?.allResults)?rd.result.allResults.find(a=>a.num===missN)?.rank+'着':'圏外')+'で不的中');
+    reasons.push('軸馬は好走→相手選びの精度向上が課題');
   }else{
     const winners=t3.map(n=>fH(n)).filter(Boolean);
     const bh=betNums.map(n=>fH(n)).filter(Boolean);
