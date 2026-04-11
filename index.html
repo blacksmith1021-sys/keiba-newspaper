@@ -834,7 +834,7 @@ x=af.match(/(\d{3})kg/);if(x)pr.prevWt=+x[1];
 // 前走の回り方向
 if(LEFT_VENUES.some(v=>(pr.venue||'').includes(v)))pr.dir='左';else if(RIGHT_VENUES.some(v=>(pr.venue||'').includes(v)))pr.dir='右';
 // 着差: "馬名(N.N)" パターン
-x=af.match(/\n([ァ-ヶー\u3000-\u9FFFa-zA-Z]+)\(([\d.]+)\)/);if(x)pr.gap=parseFloat(x[2]);
+x=af.match(/\n([ァ-ヶー\u3000-\u9FFFa-zA-Z]+)\s*[\(（]([\d.]+)[\)）]/);if(x)pr.gap=parseFloat(x[2]);
 if(pr.fin===1)pr.gap=0;
 h.prev.push(pr)}
 // 日付の新しい順にソート（前走が[0]になるように）
@@ -871,6 +871,20 @@ function calcPrevScoreV6(h,ri){
   const v=(ri?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
   if(l.venue&&v&&l.venue===v)s+=4;
   if(pf<=3&&l.run&&l.run>=14)s+=6;else if(pf<=3&&l.run&&l.run>=10)s+=3;
+
+  // 2-4走前の実績ボーナス（新規追加）
+  const older=h.prev?.slice(1,4).filter(p=>p.fin!=null)||[];
+  if(older.length>0){
+    const olderHits=older.filter(p=>p.fin<=3).length;
+    const olderBoard=older.filter(p=>p.fin<=5).length;
+    // 過去走で好走実績があれば加点（前走だけの一発屋と区別）
+    if(olderHits>=2)s+=8; // 2走以上3着以内: 実力馬
+    else if(olderHits>=1)s+=4; // 1走3着以内: 実績あり
+    else if(olderBoard>=2)s+=2; // 掲示板常連
+    // 過去走が全て凡走なら減点（前走の好走が偶然の可能性）
+    if(older.length>=2&&olderBoard===0)s-=4;
+  }
+
   return s;
 }
 function detectPatternsV6(horse){
@@ -948,17 +962,19 @@ const isSlight=raceCond==='稍重';
 // 条件一致度: 同芝ダ＋距離差200m以内→best、同芝ダのみ→ok、それ以外→前走[0]
 function findMatchRace(h){
   if(!h.prev||h.prev.length===0)return null;
-  // 完全一致（同芝ダ＋距離±200m）
   const surfKey=isDirt?'ダ':'芝';
-  let best=h.prev.find(p=>p.dist&&Math.abs(p.dist-dist)<=200&&p.surface===surfKey);
-  if(best)return best;
-  // 芝ダ一致のみ
-  best=h.prev.find(p=>p.surface===surfKey);
-  if(best)return best;
-  // 距離一致のみ
-  best=h.prev.find(p=>p.dist&&Math.abs(p.dist-dist)<=200);
-  if(best)return best;
-  return h.prev[0];
+  // 条件一致度でスコアリングし、最高点の走を返す
+  let bestScore=-1,bestRace=null;
+  h.prev.slice(0,4).forEach(p=>{
+    let sc=0;
+    if(p.surface===surfKey)sc+=10; // 芝ダ一致
+    if(p.dist&&Math.abs(p.dist-dist)<=200)sc+=8; // 距離近い
+    else if(p.dist&&Math.abs(p.dist-dist)<=400)sc+=4;
+    if(p.fin&&p.fin<=3)sc+=3; // 好走実績があるレース優先
+    else if(p.fin&&p.fin<=5)sc+=1;
+    if(sc>bestScore){bestScore=sc;bestRace=p}
+  });
+  return bestRace||h.prev[0];
 }
 hs.forEach(h=>{h._matchRace=findMatchRace(h)});
 
@@ -991,7 +1007,7 @@ const paceAdvantage=paceType==='H超'||paceType==='H'?'差し追込':'先行';
 // Phase2: 51レース706頭の実データ検証に基づく重み（g-b差＝予測力）
 // 前走+37,着差+37→最有力 / 蓄積+34,安定+32→有力 / 上がり+25,距離+25→有力
 // 回り+16→やや有効 / 血統+10→弱い / 間隔+1→無効
-const FW={'前走':2.0,'着差':2.0,'蓄積':1.8,'安定':1.7,'上がり':1.5,'距離':1.5,'騎手':1.3,'回り':0.8,'血統':0.3,'間隔':0};
+const FW={'前走':2.0,'着差':2.0,'蓄積':1.8,'安定':1.7,'stability':1.5,'上がり':1.5,'距離':1.5,'騎手':1.3,'回り':0.8,'血統':0.3,'間隔':0};
 const fw=(k,pts)=>Math.round(pts*(FW[k]!=null?FW[k]:1)); // 重み付き加点
 
 // 競馬場名取得
@@ -1032,12 +1048,57 @@ if(mr?.f3&&f3list.length>=3){
   else{s-=2;f['上がり']={v:mr.f3+'s(遅)',c:'b'}}
 }
 
-// 過去4走トレンド
-if(h.prev?.length>=2&&h.prev[0]?.fin&&h.prev[1]?.fin){
-  const r1=h.prev[0].fin,r2=h.prev[1].fin;
-  if(r1<r2){s+=10;f['トレンド']={v:'↑改善('+r2+'着→'+r1+'着)',c:'g'}}
-  else if(r1===r2){s+=5;f['トレンド']={v:'→横ばい('+r1+'着)',c:'n'}}
-  else{f['トレンド']={v:'↓悪化('+r2+'着→'+r1+'着)',c:'b'}}
+// 過去走トレンド（最大4走の推移を評価）
+if(h.prev?.length>=2){
+  const runs=h.prev.slice(0,4).filter(p=>p.fin!=null);
+  if(runs.length>=3){
+    // 3走以上: 連続改善・連続悪化を検出
+    let improving=true,declining=true;
+    for(let i=0;i<runs.length-1;i++){
+      if(runs[i].fin>=runs[i+1].fin)improving=false;
+      if(runs[i].fin<=runs[i+1].fin)declining=false;
+    }
+    // runsは新しい順なので、improving = 着順が減っている = 好転
+    if(improving){s+=12;f['トレンド']={v:'↑'+runs.length+'走連続改善('+runs.map(p=>p.fin+'着').reverse().join('→')+')',c:'g'}}
+    else if(declining){s-=3;f['トレンド']={v:'↓'+runs.length+'走連続悪化('+runs.map(p=>p.fin+'着').reverse().join('→')+')',c:'b'}}
+    else{
+      const r1=runs[0].fin,r2=runs[1].fin;
+      if(r1<r2){s+=8;f['トレンド']={v:'↑直近改善('+r2+'着→'+r1+'着)',c:'g'}}
+      else if(r1===r2){s+=3;f['トレンド']={v:'→横ばい('+r1+'着)',c:'n'}}
+      else{s-=2;f['トレンド']={v:'↓直近悪化('+r2+'着→'+r1+'着)',c:'b'}}
+    }
+  }else if(runs.length===2){
+    const r1=runs[0].fin,r2=runs[1].fin;
+    if(r1<r2){s+=8;f['トレンド']={v:'↑改善('+r2+'着→'+r1+'着)',c:'g'}}
+    else if(r1===r2){s+=3;f['トレンド']={v:'→横ばい('+r1+'着)',c:'n'}}
+    else{f['トレンド']={v:'↓悪化('+r2+'着→'+r1+'着)',c:'b'}}
+  }
+}
+
+// 過去4走の安定性（前走だけでなく全走を評価）
+if(h.prev?.length>=2){
+  const runs=h.prev.slice(0,4).filter(p=>p.fin&&p.run);
+  if(runs.length>=2){
+    // 平均着順率（着順/頭数）
+    const avgRate=runs.reduce((a,p)=>a+p.fin/p.run,0)/runs.length;
+    // 掲示板率（5着以内の割合）
+    const boardRate=runs.filter(p=>p.fin<=5).length/runs.length;
+    // 3着以内率
+    const hitRate=runs.filter(p=>p.fin<=3).length/runs.length;
+
+    let stPts=0;let stLabel='';
+    if(hitRate>=0.75&&runs.length>=3){stPts=fw('stability',12);stLabel=runs.length+'走中'+runs.filter(p=>p.fin<=3).length+'回3着内(安定)'}
+    else if(hitRate>=0.5){stPts=fw('stability',8);stLabel=runs.length+'走中'+runs.filter(p=>p.fin<=3).length+'回3着内'}
+    else if(boardRate>=0.75){stPts=fw('stability',5);stLabel=runs.length+'走中'+runs.filter(p=>p.fin<=5).length+'回掲示板'}
+    else if(avgRate<=0.4){stPts=fw('stability',3);stLabel='平均上位40%'}
+    else if(boardRate<=0.25&&runs.length>=3){stPts=-fw('stability',5);stLabel=runs.length+'走中掲示板'+runs.filter(p=>p.fin<=5).length+'回(不振)'}
+    else if(avgRate>=0.7){stPts=-fw('stability',3);stLabel='平均下位30%'}
+
+    if(stPts!==0){
+      s+=stPts;
+      f['安定性']={v:stLabel,c:stPts>0?'g':'b'};
+    }
+  }
 }
 
 // ===【条件適性】===
@@ -3797,19 +3858,19 @@ function renderDetail(id){
       const mk=x.v6mark||'△';
       const pt=[];if(x.v6_実績降格)pt.push('実績降格');if(x.v6_巻き返し)pt.push('巻き返し');if(x.v6_隠れ末脚)pt.push('隠れ末脚');
       const bg=mk==='◎'?'rgba(196,30,58,.06)':mk==='○'?'rgba(26,68,136,.06)':mk==='穴'?'rgba(184,134,11,.08)':i%2===0?'var(--p)':'var(--p2)';
-      // 前走情報
-      const lp=x.prev?.[0];
+      // 前走情報（最大4走）
       let prevStr='—';
-      if(lp){
-        const fin=lp.fin!=null?lp.fin+'着':'';
-        const run=lp.run?'/'+lp.run+'頭':'';
-        const dist=lp.dist||'';
-        const surf=lp.surface==='ダ'?'ダ':lp.surface==='芝'?'芝':'';
-        const cond=lp.cond||'';
-        const tm=lp.time||'';
-        const venue=lp.venue||'';
-        const f3=lp.f3?'上'+lp.f3:'';
-        prevStr=`<span style="font-weight:700;color:${lp.fin<=3?'var(--red)':lp.fin<=5?'var(--blu)':'var(--dim)'}">${fin}</span>${run} ${venue}${dist}${surf}${cond?'('+cond+')':''} ${tm} ${f3}`;
+      if(x.prev?.length>0){
+        prevStr=x.prev.slice(0,4).map(lp=>{
+          if(!lp.fin)return '';
+          const fin=lp.fin+'着';
+          const run=lp.run?'/'+lp.run+'頭':'';
+          const dist=lp.dist||'';
+          const surf=lp.surface==='ダ'?'ダ':lp.surface==='芝'?'芝':'';
+          const venue=lp.venue||'';
+          const color=lp.fin<=3?'var(--red)':lp.fin<=5?'var(--blu)':'var(--dim)';
+          return '<span style="color:'+color+';font-weight:'+(lp.fin<=3?'700':'400')+'">'+fin+'</span>'+run+' '+venue+dist+surf;
+        }).filter(Boolean).join('<br>');
       }
       // 性齢
       const sexAge=(x.sex||'')+(x.age||'');
@@ -3834,7 +3895,7 @@ function renderDetail(id){
       h+=`<td style="padding:3px 4px;text-align:center;font-weight:700;color:${sf6>=20?'var(--grn)':sf6>=10?'var(--gld)':'var(--dim)'}">${sf6}</td>`;
       h+=`<td style="padding:3px 4px;text-align:center;color:${pv6>=25?'var(--grn)':'var(--dim)'}">${pv6!=null?pv6:'—'}</td>`;
       h+=`<td style="padding:3px 4px;text-align:center;font-size:10px;color:var(--gld);font-weight:700">${pt.join(' ')}</td>`;
-      h+=`<td style="padding:3px 4px;font-size:11px">${prevStr}</td>`;
+      h+=`<td style="padding:3px 4px;font-size:10px;line-height:1.4;white-space:normal;min-width:120px">${prevStr}</td>`;
       h+=`</tr>`;
     });
     h+=`</table></div>`;
