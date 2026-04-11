@@ -899,43 +899,87 @@ function detectPatternsV6(horse){
   return horse.v6_巻き返し||horse.v6_実績降格||horse.v6_隠れ末脚;
 }
 function classifyRaceV6(horses,ri){
-  const fav1=horses.find(h=>(h.pop||h._resultPopularity)===1);
-  const fav1sf=fav1?calcSixFactorV6(fav1,ri).score:0;
-  const hasP=horses.some(h=>(h.pop||h._resultPopularity||0)>=6&&(h.v6_巻き返し||h.v6_実績降格||h.v6_隠れ末脚));
-  if(fav1sf>=20&&!hasP)return'SOLID';
-  if(hasP)return'UPSET';
+  // 穴馬候補: 補正スコア80+（adjNs or ns）× 7-10人気
+  const anaPool=horses.filter(h=>{
+    const p=h.pop||h._resultPopularity||99;
+    const sc=h.adjNs||h.ns||0;
+    return p>=7&&p<=10&&sc>=80;
+  });
+  // 軸馬: スコア1位 × 1-6人気
+  const sorted=[...horses].sort((a,b)=>(b.adjNs||b.ns||0)-(a.adjNs||a.ns||0));
+  const top1=sorted[0];
+  const top2=sorted[1];
+  const t1pop=top1?.pop||top1?._resultPopularity||99;
+  const t2pop=top2?.pop||top2?._resultPopularity||99;
+
+  // TYPE1: 穴馬あり → ANA（穴馬複勝が最高ROI）
+  if(anaPool.length>0)return'ANA';
+  // TYPE2: 上位2頭が共に1-6人気 → WIDE（ワイドが高ROI）
+  if(t1pop<=6&&t2pop<=6)return'WIDE';
+  // TYPE3: 1位が1-3人気 → SOLID（鉄板複勝）
+  if(t1pop<=3)return'SOLID';
+  // TYPE4: どれにも該当しない → SKIP
   return'SKIP';
 }
 function assignMarksV6(horses,ri){
   const sf=h=>calcSixFactorV6(h,ri).score;
+  const sc=h=>h.adjNs||h.ns||0;
   const used=new Set();
-  const ax=horses.filter(h=>{const p=h.pop||h._resultPopularity||99;return p>=1&&p<=3}).sort((a,b)=>sf(b)-sf(a))[0];
+
+  // ◎: 1-6人気の中でスコア最高（1-3に限定しない）
+  const ax=horses.filter(h=>{const p=h.pop||h._resultPopularity||99;return p>=1&&p<=6})
+    .sort((a,b)=>sc(b)-sc(a))[0];
   if(ax){ax.v6mark='◎';used.add(ax.num)}
-  const pr=horses.filter(h=>{const p=h.pop||h._resultPopularity||99;return p>=1&&p<=5&&!used.has(h.num)}).sort((a,b)=>sf(b)-sf(a))[0];
+
+  // ○: 1-6人気で◎以外のスコア最高
+  const pr=horses.filter(h=>{const p=h.pop||h._resultPopularity||99;return p>=1&&p<=6&&!used.has(h.num)})
+    .sort((a,b)=>sc(b)-sc(a))[0];
   if(pr){pr.v6mark='○';used.add(pr.num)}
-  const an=horses.filter(h=>h.v6_実績降格&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a))[0]
-    ||horses.filter(h=>h.v6_巻き返し&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a))[0]
-    ||horses.filter(h=>h.v6_隠れ末脚&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a))[0];
-  if(an&&!used.has(an.num)){an.v6mark='穴';used.add(an.num)}
+
+  // 穴: 7-10人気 × 補正スコア80+の最高スコア馬
+  const an=horses.filter(h=>{
+    const p=h.pop||h._resultPopularity||99;
+    return p>=7&&p<=10&&sc(h)>=80&&!used.has(h.num);
+  }).sort((a,b)=>sc(b)-sc(a))[0];
+  if(an){an.v6mark='穴';used.add(an.num)}
+
   horses.forEach(h=>{if(!h.v6mark)h.v6mark='△'});
   return{axis:ax||null,partner:pr||null,ana:an||null};
 }
-function buildV6Bet(type,picks,ri){
-  const ax=picks.axis,an=picks.ana,pr=picks.partner;
+function buildV6Bet(type,picks,ri,horses){
   const bets=[];
-  if(type==='SKIP')return{bets:[],totalCost:0,raceType:type,reason:'堅い条件なし / 穴パターン馬なし'};
-  if(type==='SOLID'){
+  if(type==='SKIP')return{bets:[],totalCost:0,raceType:type,reason:'購入条件を満たす馬なし'};
+
+  if(type==='ANA'){
+    // 穴馬複勝: 補正80+ × 7-10人気の最高スコア馬に複勝100円
+    // （ROI 209%の最強ゾーン）
+    const ana=picks.ana;
+    if(!ana)return{bets:[],totalCost:0,raceType:type,reason:'穴馬候補消失'};
+    bets.push({kind:'複勝',horses:[ana.num],cost:100,desc:String(ana.num)});
+    // 軸馬が1-6人気ならワイドも追加（ROI 189%ゾーン）
+    const ax=picks.axis;
+    if(ax&&(ax.pop||99)<=6){
+      bets.push({kind:'ワイド',horses:[ax.num,ana.num],cost:100,desc:ax.num+'—'+ana.num});
+    }
+    return{bets,totalCost:bets.reduce((s,b)=>s+b.cost,0),raceType:type};
+  }
+
+  if(type==='WIDE'){
+    // ワイド: スコア1位×2位（共に1-6人気）にワイド100円
+    const ax=picks.axis,pr=picks.partner;
     if(!ax||!pr)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
     bets.push({kind:'ワイド',horses:[ax.num,pr.num],cost:100,desc:ax.num+'—'+pr.num});
     return{bets,totalCost:100,raceType:type};
   }
-  if(type==='UPSET'){
-    if(!ax||!an)return{bets:[],totalCost:0,raceType:type,reason:'穴馬候補不足'};
-    bets.push({kind:'ワイド',horses:[ax.num,an.num],cost:100,desc:ax.num+'—'+an.num});
-    if(calcSixFactorV6(ax,ri).score>=20)bets.push({kind:'馬連',horses:[ax.num,an.num],cost:100,desc:ax.num+'—'+an.num});
-    if(an.v6_実績降格)bets.push({kind:'複勝',horses:[an.num],cost:100,desc:String(an.num)});
-    return{bets,totalCost:bets.reduce((s,b)=>s+b.cost,0),raceType:type};
+
+  if(type==='SOLID'){
+    // 鉄板複勝: スコア1位（1-3人気）に複勝100円
+    const ax=picks.axis;
+    if(!ax)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
+    bets.push({kind:'複勝',horses:[ax.num],cost:100,desc:String(ax.num)});
+    return{bets,totalCost:100,raceType:type};
   }
+
   return{bets:[],totalCost:0,raceType:type};
 }
 function computeV6(scored,ri){
@@ -946,7 +990,7 @@ function computeV6(scored,ri){
   });
   const raceType=classifyRaceV6(scored,ri);
   const picks=assignMarksV6(scored,ri);
-  const bet=buildV6Bet(raceType,picks,ri);
+  const bet=buildV6Bet(raceType,picks,ri,scored);
   return{raceType,picks:{axis:picks.axis?.num||null,partner:picks.partner?.num||null,ana:picks.ana?.num||null},bet};
 }
 
@@ -2241,7 +2285,7 @@ function getHitInfo(r){
   const res=r.result,bt=r.bet;
   if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null,skip:false,hitTickets:[]};
   const v6=r.v6;
-  if(bt?.skipRecommended||bt?.totalInv===0||(v6&&v6.raceType==='SKIP')){
+  if(bt?.skipRecommended||bt?.totalInv===0||(v6&&v6.raceType==='SKIP'&&v6.raceType!=='UPSET')){
     return{wideHit:false,wideTicketHit:false,fukHit:false,anyHit:false,label:'見送り',ret:0,inv:0,tickets:null,skip:true,hitTickets:[]};
   }
 
@@ -3123,7 +3167,7 @@ function renderList(){
       if(hasR&&!isSkip){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
       const venue=(r.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
       const pastLabel=isPastOnly(r)?`<span style="font-size:10px;color:var(--gld);font-weight:700;background:rgba(184,134,11,.12);padding:1px 6px;border-radius:3px;margin-left:5px">取込</span>`:'';
-      const v6t=r.v6?.raceType||'';const v6badge=v6t==='SOLID'?'<span style="font-size:10px;color:var(--blu);font-weight:700;background:rgba(26,68,136,.1);padding:1px 6px;border-radius:3px;margin-left:4px">堅</span>':v6t==='UPSET'?'<span style="font-size:10px;color:var(--gld);font-weight:700;background:rgba(184,134,11,.1);padding:1px 6px;border-radius:3px;margin-left:4px">穴</span>':v6t==='SKIP'?'<span style="font-size:10px;color:var(--dim);font-weight:700;background:rgba(0,0,0,.05);padding:1px 6px;border-radius:3px;margin-left:4px">見</span>':'';
+      const v6t=r.v6?.raceType||'';const v6badge=v6t==='SOLID'?'<span style="font-size:10px;color:var(--blu);font-weight:700;background:rgba(26,68,136,.1);padding:1px 6px;border-radius:3px;margin-left:4px">鉄</span>':v6t==='WIDE'?'<span style="font-size:10px;color:var(--grn);font-weight:700;background:rgba(45,125,70,.1);padding:1px 6px;border-radius:3px;margin-left:4px">W</span>':v6t==='ANA'?'<span style="font-size:10px;color:var(--gld);font-weight:700;background:rgba(184,134,11,.1);padding:1px 6px;border-radius:3px;margin-left:4px">穴</span>':v6t==='UPSET'?'<span style="font-size:10px;color:var(--gld);font-weight:700;background:rgba(184,134,11,.1);padding:1px 6px;border-radius:3px;margin-left:4px">穴</span>':v6t==='SKIP'?'<span style="font-size:10px;color:var(--dim);font-weight:700;background:rgba(0,0,0,.05);padding:1px 6px;border-radius:3px;margin-left:4px">見</span>':'';
 
       h+=`<div class="card ${cls}" onclick="CUR='${r.id}';showView('detail')">
         <div style="flex:1;min-width:0">
@@ -3803,9 +3847,9 @@ function renderDetail(id){
     const axH=s.find(x=>x.v6mark==='◎'||x.num===v6.picks?.axis);
     const prH=s.find(x=>x.v6mark==='○'||x.num===v6.picks?.partner);
     const anH=s.find(x=>x.v6mark==='穴'||x.num===v6.picks?.ana);
-    const tC={'SOLID':'var(--blu)','UPSET':'var(--gld)','SKIP':'var(--dim)'};
-    const tL={'SOLID':'堅いレース','UPSET':'穴パターン','SKIP':'見送り'};
-    const tB={'SOLID':'rgba(26,68,136,.08)','UPSET':'rgba(184,134,11,.08)','SKIP':'rgba(0,0,0,.04)'};
+    const tC={'SOLID':'var(--blu)','WIDE':'var(--grn)','ANA':'var(--gld)','UPSET':'var(--gld)','SKIP':'var(--dim)'};
+    const tL={'SOLID':'鉄板複勝','WIDE':'ワイド狙い','ANA':'穴馬複勝','UPSET':'穴パターン','SKIP':'見送り'};
+    const tB={'SOLID':'rgba(26,68,136,.08)','WIDE':'rgba(45,125,70,.08)','ANA':'rgba(184,134,11,.08)','UPSET':'rgba(184,134,11,.08)','SKIP':'rgba(0,0,0,.04)'};
 
     if(v6t!=='SKIP'&&v6b.length>0){
       h+=`<div class="pnl" style="border:2px solid ${tC[v6t]}">`;
@@ -3822,12 +3866,14 @@ function renderDetail(id){
         const axSf=axH.v6sf!=null?axH.v6sf:calcSixFactorV6(axH,r.info).score;
         h+=`<div style="background:var(--p2);border-radius:6px;padding:10px 12px;margin-top:10px">`;
         h+=`<div style="font-weight:900;font-size:14px;color:var(--red)">◎ ${axH.num} ${axH.name}（${axH.pop||'?'}番人気 sf${axSf}）</div>`;
-        if(v6t==='UPSET'&&anH){
+        if((v6t==='ANA'||v6t==='UPSET')&&anH){
           if(axSf>=20)h+=`<div style="font-size:12px;color:var(--dim);margin-top:4px">│ 勝ちそう → 馬連追加</div>`;
           const pts=[];
-          if(anH.v6_実績降格)pts.push('[実績降格] 前走人気で好走→今走人気落ち → 複勝追加');
+          if(anH.v6_実績降格)pts.push('[実績降格] 前走人気で好走→今走人気落ち');
           if(anH.v6_巻き返し)pts.push('[巻き返し] 前走人気だったが負けた→今走人気落ち');
           if(anH.v6_隠れ末脚)pts.push('[隠れ末脚] 前走の上がりが速い');
+          const anSc=anH.adjNs||anH.ns||0;
+          pts.push('補正スコア'+anSc+' / '+(anH.pop||'?')+'人気（市場の過小評価）');
           h+=`<div style="font-size:13px;color:var(--gld);font-weight:700;margin-top:6px">└→ 穴 ${anH.num} ${anH.name}（${anH.pop||'?'}番人気）</div>`;
           pts.forEach(p=>{h+=`<div style="font-size:12px;color:var(--dim);margin-left:24px">${p}</div>`});
         }else if(prH){
@@ -3902,7 +3948,7 @@ function renderDetail(id){
     h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走S(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
     h+=`</div>`;
     h+=`<div style="font-size:11px;color:var(--dim);padding:6px 12px;background:var(--p2);border-radius:4px;margin-bottom:8px">
-      <b>投資ルール:</b> 堅い=W1点100円 / 穴=最大W+馬連+複勝300円 / 見送り=0円 / 1日損失上限-5,000円
+      <b>投資ルール:</b> 穴=複勝100円(+ワイド100円) / W=ワイド100円 / 鉄=複勝100円 / 見送り=0円 / 1日損失上限-5,000円
     </div>`;
   }
 
