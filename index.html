@@ -912,14 +912,11 @@ function classifyRaceV6(horses,ri){
   const t1pop=top1?.pop||top1?._resultPopularity||99;
   const t2pop=top2?.pop||top2?._resultPopularity||99;
 
-  // TYPE1: 穴馬あり → ANA
+  // TYPE1: 穴馬あり → ANA（ROI 209%）
   if(anaPool.length>0)return'ANA';
-  // TYPE2: 上位2頭が共に1-6人気 かつ 少なくとも1頭が4人気以降
-  // （共に1-3人気だとワイドオッズが低すぎる）
+  // TYPE2: ワイド狙い（少なくとも1頭が4人気以降でオッズ5倍以上が見込める）
   if(t1pop<=6&&t2pop<=6&&(t1pop>=4||t2pop>=4))return'WIDE';
-  // TYPE3: 1位が2-3人気 → SOLID（1番人気は複勝オッズが低すぎるため除外）
-  if(t1pop>=2&&t1pop<=3)return'SOLID';
-  // TYPE4: どれにも該当しない → SKIP
+  // それ以外はすべて見送り（鉄板複勝はROI 106%で利益が出ない）
   return'SKIP';
 }
 function assignMarksV6(horses,ri){
@@ -952,20 +949,18 @@ function buildV6Bet(type,picks,ri,horses){
   if(type==='SKIP'){
     const sorted=[...(horses||[])].sort((a,b)=>(b.adjNs||b.ns||0)-(a.adjNs||a.ns||0));
     const t1pop=sorted[0]?.pop||99;
+    const t2pop=sorted[1]?.pop||99;
     let reason='購入条件を満たす馬なし';
-    if(t1pop===1)reason='最高スコア馬が1番人気（複勝オッズ低すぎ・ROI非効率）';
-    else if(t1pop<=3&&sorted[1]&&(sorted[1].pop||99)<=3)reason='上位2頭が共に1-3人気（ワイドオッズ低すぎ）';
+    if(t1pop===1)reason='最高スコア馬が1番人気（複勝1.1-1.3倍で回収不能）';
+    else if(t1pop<=3&&t2pop<=3)reason='上位2頭が1-3人気同士（低配当ゾーン・ROI 106%）';
+    else if(t1pop<=3)reason='最高スコア馬が2-3番人気（複勝1.5-2.5倍で利益薄）';
     return{bets:[],totalCost:0,raceType:type,reason};
   }
 
   if(type==='ANA'){
-    // 穴馬複勝: 補正80+ × 7-10人気の最高スコア馬に複勝100円
-    // （ROI 209%の最強ゾーン）
     const ana=picks.ana;
     if(!ana)return{bets:[],totalCost:0,raceType:type,reason:'穴馬候補消失'};
     bets.push({kind:'複勝',horses:[ana.num],cost:100,desc:String(ana.num)});
-    // 軸馬が4-6人気ならワイドも追加（中配当ゾーン）
-    // 軸馬が1-3人気だとワイドオッズが低すぎるため追加しない
     const ax=picks.axis;
     if(ax&&(ax.pop||99)>=4&&(ax.pop||99)<=6){
       bets.push({kind:'ワイド',horses:[ax.num,ana.num],cost:100,desc:ax.num+'—'+ana.num});
@@ -976,24 +971,15 @@ function buildV6Bet(type,picks,ri,horses){
   if(type==='WIDE'){
     const ax=picks.axis,pr=picks.partner;
     if(!ax||!pr)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
-    // 低配当フィルタ: 共に1-3人気のワイドは配当が低すぎる（概算3-5倍）
-    const axPop=ax.pop||99,prPop=pr.pop||99;
-    if(axPop<=3&&prPop<=3){
-      return{bets:[],totalCost:0,raceType:'SKIP',reason:'ワイドオッズ低すぎ('+axPop+'人気×'+prPop+'人気)'};
-    }
     bets.push({kind:'ワイド',horses:[ax.num,pr.num],cost:100,desc:ax.num+'—'+pr.num});
-    return{bets,totalCost:100,raceType:type};
-  }
-
-  if(type==='SOLID'){
-    const ax=picks.axis;
-    if(!ax)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
-    // 1番人気の複勝はオッズ1.1-1.3倍で利益が出ない
-    if((ax.pop||99)===1){
-      return{bets:[],totalCost:0,raceType:'SKIP',reason:'1番人気の複勝は低配当(ROI非効率)'};
+    const sc=h=>h.adjNs||h.ns||0;
+    const sorted=[...(horses||[])].sort((a,b)=>sc(b)-sc(a));
+    const gap12=Math.abs(sc(sorted[0])-sc(sorted[1]));
+    const gap23=sorted.length>=3?sc(sorted[1])-sc(sorted[2]):0;
+    if(gap12<=10&&gap23>=15){
+      bets.push({kind:'馬連',horses:[ax.num,pr.num],cost:100,desc:ax.num+'—'+pr.num});
     }
-    bets.push({kind:'複勝',horses:[ax.num],cost:100,desc:String(ax.num)});
-    return{bets,totalCost:100,raceType:type};
+    return{bets,totalCost:bets.reduce((s,b)=>s+b.cost,0),raceType:type};
   }
 
   return{bets:[],totalCost:0,raceType:type};
@@ -3964,7 +3950,7 @@ function renderDetail(id){
     h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走S(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
     h+=`</div>`;
     h+=`<div style="font-size:11px;color:var(--dim);padding:6px 12px;background:var(--p2);border-radius:4px;margin-bottom:8px">
-      <b>投資ルール:</b> 穴=複勝100円(+ワイド100円) / W=ワイド100円 / 鉄=複勝100円 / 低配当=見送り / 1日損失上限-5,000円
+      <b>投資ルール:</b> 穴=複勝100円(+ワイド100円) / W=ワイド100円(+馬連100円) / その他=見送り / 1日損失上限-5,000円
     </div>`;
   }
 
