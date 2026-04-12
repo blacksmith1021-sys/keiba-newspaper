@@ -855,8 +855,35 @@ function calcSixFactorV6(h,ri){
   else if(wt>=460)s+=2;else if(wt>0&&wt<440){s-=8;d.push('<440kg-8')}
   const imp=h.imp||0;
   if(imp>=57){s+=5;d.push('斤量57+5')}else if(imp>0&&imp<54){s-=8;d.push('斤量<54-8')}
+  // --- トラックバイアス補正（枠順 × 馬場バイアス） ---
   const course=ri?.type||'',dist=ri?.dist||0,gate=h.num||0;
-  if(course==='芝'&&dist>=1500&&gate>0){if(gate<=4){s+=4;d.push('内枠+4')}else if(gate>=9){s-=3;d.push('外枠-3')}}
+  if(course==='芝'&&gate>0){
+    const runners=16; // 6因子計算時はhs未確定のためデフォルト
+    const isInnerGate=gate<=Math.ceil(runners*0.25);
+    const isOuterGate=gate>=Math.ceil(runners*0.75);
+    // 開催日数から内外バイアスを推定
+    const km=(ri?.course||'').match(/(\d+)日/);
+    const kd=km?parseInt(km[1]):4;
+    const cv=ri?.cond||'良';
+    let bi=0;
+    if(kd<=2)bi=2;else if(kd>=6)bi=-2;
+    if(cv==='重'||cv==='不良')bi-=1;
+
+    if(bi>=2){
+      if(isInnerGate){s+=6;d.push('内枠×内有利+6')}
+      else if(isOuterGate){s-=4;d.push('外枠×内有利-4')}
+    }else if(bi<=-2){
+      if(isOuterGate){s+=4;d.push('外枠×外有利+4')}
+      else if(isInnerGate){s-=3;d.push('内枠×外有利-3')}
+    }else{
+      if(dist>=1500){
+        if(isInnerGate){s+=2;d.push('内枠+2')}
+        else if(isOuterGate){s-=2;d.push('外枠-2')}
+      }
+    }
+  }else if(course==='ダート'&&gate>0){
+    if(dist>=1500&&gate<=3){s+=2;d.push('ダ内枠+2')}
+  }
   const sex=h.sex||'';
   if(sex==='牡'){s+=3;d.push('牡+3')}else if(sex==='牝'){s-=3;d.push('牝-3')}
   const wc=h.wc;
@@ -993,7 +1020,15 @@ function computeV6(scored,ri){
   const raceType=classifyRaceV6(scored,ri);
   const picks=assignMarksV6(scored,ri);
   const bet=buildV6Bet(raceType,picks,ri,scored);
-  return{raceType,picks:{axis:picks.axis?.num||null,partner:picks.partner?.num||null,ana:picks.ana?.num||null},bet};
+  // バイアス情報を算出
+  const _st=ri?.type||'芝',_cv=ri?.cond||'良';
+  const _hs=(_st==='芝')?(_cv==='良'||_cv==='稍重'):(_cv==='重'||_cv==='不良');
+  const speedLabel=_hs?'高速':'タフ';
+  const _km=(ri?.course||'').match(/(\d+)日/);
+  const _kd=_km?parseInt(_km[1]):4;
+  let _bi=0;if(_st==='芝'){if(_kd<=2)_bi=2;else if(_kd>=6)_bi=-2;if(_cv==='重'||_cv==='不良')_bi-=1}
+  const biasLabel=_bi>=2?'内有利':_bi<=-2?'外有利':'フラット';
+  return{raceType,picks:{axis:picks.axis?.num||null,partner:picks.partner?.num||null,ana:picks.ana?.num||null},bet,biasLabel,speedLabel};
 }
 
 // ===== SCORING =====
@@ -1028,6 +1063,36 @@ hs.forEach(h=>{h._matchRace=findMatchRace(h)});
 const f3list=hs.map(h=>h._matchRace?.f3).filter(v=>v&&v>0);
 const f3avg=f3list.length>0?f3list.reduce((a,b)=>a+b,0)/f3list.length:38.5;
 const f3sorted=[...f3list].sort((a,b)=>a-b); // 速い順
+
+// --- STEP2.5: トラックバイアス推定 ---
+// 芝: 良・稍重→高速寄り、重・不良→タフ
+// ダート: 良・稍重→タフ（砂深い）、重・不良→高速寄り（水含み走りやすい）
+const surfType=inf.type||'芝';
+const condVal=inf.cond||'良';
+const isHighSpeed=(surfType==='芝')
+  ?(condVal==='良'||condVal==='稍重')
+  :(condVal==='重'||condVal==='不良');
+const isTough=!isHighSpeed;
+
+// 開催情報からコース替わり・開幕週を推定
+// inf.courseは「3回中山6日」のような形式
+const kaiMatch=(inf.course||'').match(/(\d+)日/);
+const kaiDay=kaiMatch?parseInt(kaiMatch[1]):4; // デフォルト4日目（中間）
+const isEarlyKai=kaiDay<=2; // 開幕週〜2日目
+const isLateKai=kaiDay>=6;  // 後半開催
+
+// 芝の内外有利推定（ダートは内外差なし）
+let biasInner=0; // +で内有利、-で外有利
+if(surfType==='芝'){
+  if(isEarlyKai)biasInner=2;       // 開幕週は内有利
+  else if(isLateKai)biasInner=-2;   // 後半は外有利寄り
+  else biasInner=0;                 // 中間はフラット
+  // 重・不良でさらに荒れやすい（外有利に振れやすい）
+  if(condVal==='重'||condVal==='不良')biasInner-=1;
+}
+
+const biasLabel=biasInner>=2?'内有利':biasInner<=-2?'外有利':'フラット';
+const speedLabel=isHighSpeed?'高速':'タフ';
 
 // --- STEP3: 展開予測（逃げ馬の数→ペース判定） ---
 const escapes=hs.filter(h=>{
@@ -1483,8 +1548,49 @@ function calcStatScore(h,raceInfo){
   if(wt>=520){s+=8;detail.push('520kg+8')}else if(wt>=480){s+=5;detail.push('480kg+5')}else if(wt>=460){s+=2}else if(wt>0&&wt<440){s-=8;detail.push('<440kg-8')}
   const imp=h.imp||0;
   if(imp>=57){s+=5;detail.push('斤量+5')}else if(imp>0&&imp<54){s-=8;detail.push('斤量-8')}
+  // --- トラックバイアス補正（枠順 × 馬場バイアス） ---
   const course=raceInfo?.type||'';const dist=raceInfo?.dist||0;const gate=h.num||0;
-  if(course==='芝'&&dist>=1500&&gate>0){if(gate<=4){s+=4;detail.push('内枠+4')}else if(gate>=9){s-=3;detail.push('外枠-3')}}
+  if(course==='芝'&&gate>0){
+    const runners=16;
+    const isInnerGate=gate<=Math.ceil(runners*0.25);
+    const isOuterGate=gate>=Math.ceil(runners*0.75);
+    const km=(raceInfo?.course||'').match(/(\d+)日/);
+    const kd=km?parseInt(km[1]):4;
+    const cv=raceInfo?.cond||'良';
+    let bi=0;
+    if(kd<=2)bi=2;else if(kd>=6)bi=-2;
+    if(cv==='重'||cv==='不良')bi-=1;
+    if(bi>=2){
+      if(isInnerGate){s+=6;detail.push('内枠×内有利+6')}
+      else if(isOuterGate){s-=4;detail.push('外枠×内有利-4')}
+    }else if(bi<=-2){
+      if(isOuterGate){s+=4;detail.push('外枠×外有利+4')}
+      else if(isInnerGate){s-=3;detail.push('内枠×外有利-3')}
+    }else{
+      if(dist>=1500){
+        if(isInnerGate){s+=2;detail.push('内枠+2')}
+        else if(isOuterGate){s-=2;detail.push('外枠-2')}
+      }
+    }
+  }else if(course==='ダート'&&gate>0){
+    if(dist>=1500&&gate<=3){s+=2;detail.push('ダ内枠+2')}
+  }
+  // --- 脚質×馬場コンディション補正 ---
+  const prevPos=h.prev?.[0]?.pos;
+  const firstPos=prevPos?.[0]||0;
+  const isLeader=firstPos>0&&firstPos<=3;
+  const isCloser=firstPos>=8;
+  const cv2=raceInfo?.cond||'良';
+  const st2=raceInfo?.type||'芝';
+  const hs2=(st2==='芝')?(cv2==='良'||cv2==='稍重'):(cv2==='重'||cv2==='不良');
+  const tf2=!hs2;
+  const km2=(raceInfo?.course||'').match(/(\d+)日/);
+  const kd2=km2?parseInt(km2[1]):4;
+  let bi2=0;if(st2==='芝'){if(kd2<=2)bi2=2;else if(kd2>=6)bi2=-2;if(cv2==='重'||cv2==='不良')bi2-=1}
+  if(hs2&&isLeader){s+=3;detail.push('高速場×先行+3')}
+  else if(tf2&&isCloser){s+=3;detail.push('タフ場×差し+3')}
+  else if(hs2&&isCloser&&bi2>=2){s-=3;detail.push('高速内有利×追込-3')}
+  else if(tf2&&isLeader&&bi2<=-2){s-=2;detail.push('タフ外有利×先行-2')}
   const sex=h.sex||'';
   if(sex==='牡'){s+=3;detail.push('牡+3')}else if(sex==='牝'){s-=3;detail.push('牝-3')}
   const wc=h.wc;
@@ -3855,7 +3961,8 @@ function renderDetail(id){
 
     if(v6t!=='SKIP'&&v6b.length>0){
       h+=`<div class="pnl" style="border:2px solid ${tC[v6t]}">`;
-      h+=`<h3 style="color:${tC[v6t]}">📊 統合推奨馬券 <span style="font-size:11px;background:${tB[v6t]};color:${tC[v6t]};padding:2px 8px;border-radius:3px;margin-left:6px">${tL[v6t]}</span></h3>`;
+      const biasInfo=r.v6?.biasLabel&&r.v6?.speedLabel?`<span style="margin-left:8px;font-size:11px;color:var(--dim)">馬場: ${r.v6.speedLabel} / ${r.v6.biasLabel}</span>`:'';
+      h+=`<h3 style="color:${tC[v6t]}">📊 統合推奨馬券 <span style="font-size:11px;background:${tB[v6t]};color:${tC[v6t]};padding:2px 8px;border-radius:3px;margin-left:6px">${tL[v6t]}</span>${biasInfo}</h3>`;
       v6b.forEach(bt=>{
         h+=`<div style="display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px dashed var(--bdr)">
           <span style="min-width:60px;font-weight:900;color:var(--grn);font-size:15px">${bt.kind}</span>
