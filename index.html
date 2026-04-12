@@ -2469,11 +2469,30 @@ function getHitInfo(r){
   const pays=res.payouts||{};
   const inv=(r.v6?.bet?.totalCost>0?r.v6.bet.totalCost:bt?.totalInv!=null?bt.totalInv:((bt?.wideAmount||0)+(bt?.fukAmount||0)))||0;
 
-  // === 推奨チケットごとに的中判定（推奨券種のみ） ===
+  // === 推奨チケットごとに的中判定 ===
   let ret=0;
   const hitTickets=[];
 
-  if(bt?.tickets?.length>0){
+  // V6買い目を最優先で判定（画面に表示される推奨馬券がV6）
+  if(v6?.bet?.bets?.length>0){
+    v6.bet.bets.forEach(vb=>{
+      const nums=vb.horses||[];let hit=false;
+      switch(vb.kind){
+        case '複勝':hit=nums.length>=1&&t3.includes(nums[0]);break;
+        case '馬連':hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]);break;
+        case 'ワイド':hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]);break;
+      }
+      if(hit){
+        const sn=[...nums].sort((a,b)=>a-b);
+        let pay=findPayout(pays,vb.kind,sn)||0;
+        if(!pay&&res.payout>0)pay=res.payout;
+        ret+=pay*(vb.cost/100);
+        hitTickets.push({type:vb.kind,desc:vb.desc,pay,amount:vb.cost});
+      }
+    });
+  }
+  // V6買い目がない場合のみ旧ロジックにフォールバック
+  else if(bt?.tickets?.length>0){
     bt.tickets.forEach(tk=>{
       const nums=tk.horses?.map(h=>h.num)||[];
       let hit=false;
@@ -2489,15 +2508,12 @@ function getHitInfo(r){
       if(hit){
         const sortedNums=tk.type==='馬単'||tk.type==='3連単'?nums:[...nums].sort((a,b)=>a-b);
         let pay=findPayout(pays,tk.type,sortedNums)||0;
-        // 払戻金が取得できない場合、手入力の払戻額またはcheckAllTicketsの結果をフォールバック
         if(pay===0){
           const allTk=checkAllTickets(r);
           if(allTk){
-            // 券種名でcheckAllTicketsの結果を参照
-            const tkKey=tk.type==='単勝'?'単勝':tk.type==='馬連'?'馬連':tk.type==='ワイド'?'ワイド':tk.type==='馬単'?'馬単':tk.type==='3連複'?'3連複':tk.type==='3連単'?'3連単':null;
+            const tkKey=tk.type;
             if(tkKey&&allTk[tkKey]?.hit&&allTk[tkKey]?.pay>0)pay=allTk[tkKey].pay;
           }
-          // それでも0なら手入力の払戻額を使用
           if(pay===0&&res.payout>0)pay=res.payout;
         }
         ret+=pay*(tk.amount/100);
@@ -2505,7 +2521,7 @@ function getHitInfo(r){
       }
     });
   }
-  // v13以前（従来ロジック: tickets配列なし）
+  // v13以前（tickets配列もv6もない場合）
   else{
     let betNums=[];
     if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
@@ -2516,19 +2532,6 @@ function getHitInfo(r){
     if(wHit){const p=findPayout(pays,'ワイド',betNums)||res.payout||0;ret+=p*((wAmt||300)/100);hitTickets.push({type:'馬連',desc:betNums.join('─'),pay:p});}
     const fHit=!!(fukNum&&fAmt>0&&t3.includes(fukNum));
     if(fHit){const p=findPayout(pays,'複勝',[fukNum])||0;if(p>0)ret+=p*(fAmt/100);hitTickets.push({type:'複勝',desc:String(fukNum),pay:p});}
-  }
-
-  // V6的中判定（v6データがある場合、上記の従来判定に加えてv6買い目もチェック）
-  if(v6?.bet?.bets?.length>0&&hitTickets.length===0){
-    v6.bet.bets.forEach(vb=>{
-      const nums=vb.horses||[];let hit=false;
-      switch(vb.kind){
-        case '複勝':hit=nums.length>=1&&t3.includes(nums[0]);break;
-        case '馬連':hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]);break;
-        case 'ワイド':hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]);break;
-      }
-      if(hit){const sn=[...nums].sort((a,b)=>a-b);let pay=findPayout(pays,vb.kind,sn)||0;if(!pay&&res.payout>0)pay=res.payout;ret+=pay*(vb.cost/100);hitTickets.push({type:vb.kind,desc:vb.desc,pay,amount:vb.cost})}
-    });
   }
 
   const anyHit=hitTickets.length>0;
