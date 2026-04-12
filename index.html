@@ -1028,7 +1028,69 @@ function computeV6(scored,ri){
   const _kd=_km?parseInt(_km[1]):4;
   let _bi=0;if(_st==='芝'){if(_kd<=2)_bi=2;else if(_kd>=6)_bi=-2;if(_cv==='重'||_cv==='不良')_bi-=1}
   const biasLabel=_bi>=2?'内有利':_bi<=-2?'外有利':'フラット';
-  return{raceType,picks:{axis:picks.axis?.num||null,partner:picks.partner?.num||null,ana:picks.ana?.num||null},bet,biasLabel,speedLabel};
+
+  // --- 戦略判断理由の生成 ---
+  const reasons=[];
+  const sorted=[...scored].sort((a,b)=>(b.adjNs||b.ns||0)-(a.adjNs||a.ns||0));
+  const top1=sorted[0], top2=sorted[1], top3=sorted[2];
+  const t1p=top1?.pop||99, t2p=top2?.pop||99;
+  const t1sc=top1?.adjNs||top1?.ns||0, t2sc=top2?.adjNs||top2?.ns||0;
+
+  // 1番人気の評価
+  const pop1=scored.find(h=>(h.pop||99)===1);
+  if(pop1){
+    const pop1sc=pop1.adjNs||pop1.ns||0;
+    const isTop=sorted[0]?.num===pop1.num;
+    if(isTop){
+      reasons.push({icon:'⚠️',text:'1番人気がスコア最高 → 配当妙味なし（期待値の原則）'});
+    }else{
+      const rank=sorted.findIndex(h=>h.num===pop1.num)+1;
+      reasons.push({icon:'✅',text:`1番人気はスコア${rank}位（${pop1sc}点）→ 過大評価の可能性（危険な人気馬）`});
+    }
+  }
+
+  // スコア1位の馬の評価
+  if(top1){
+    const t1name=top1.name||top1.num;
+    reasons.push({icon:'🏇',text:`スコア1位: ${t1name}（${t1p}番人気・${t1sc}点）`});
+  }
+
+  // レースタイプの判断理由
+  if(raceType==='SKIP'){
+    if(t1p===1)reasons.push({icon:'🚫',text:'最高スコア馬が1番人気 → 複勝1.1-1.3倍で回収不能'});
+    else if(t1p<=3&&t2p<=3)reasons.push({icon:'🚫',text:'上位2頭が1-3番人気同士 → ワイドも低配当（ROI 106%）'});
+    else if(t1p<=3)reasons.push({icon:'🚫',text:'最高スコア馬が2-3番人気 → 複勝1.5-2.5倍で利益薄'});
+    reasons.push({icon:'💡',text:'買わない判断も立派なレース選び（JRAの罠を回避）'});
+  }else if(raceType==='ANA'){
+    const ana=picks.ana;
+    if(ana){
+      const anaSc=ana.adjNs||ana.ns||0;
+      const anaPop=ana.pop||'?';
+      reasons.push({icon:'🎯',text:`穴馬${ana.name||ana.num}（${anaPop}番人気・スコア${anaSc}）→ 市場が過小評価（ROI 209%ゾーン）`});
+      if(ana.v6_実績降格)reasons.push({icon:'📈',text:'実績降格パターン: 前走人気で好走→今走人気落ち（条件好転馬）'});
+      if(ana.v6_巻き返し)reasons.push({icon:'🔄',text:'巻き返しパターン: 前走の敗因が今回解消される可能性'});
+      if(ana.v6_隠れ末脚)reasons.push({icon:'⚡',text:'隠れ末脚: 上がりタイムが優秀 → 展開次第で一発あり'});
+    }
+    reasons.push({icon:'💰',text:'穴馬複勝1点100円に集中（資金効率の最大化）'});
+  }else if(raceType==='WIDE'){
+    if(top1&&top2){
+      reasons.push({icon:'🎯',text:`${top1.name||top1.num}（${t1p}番人気）×${top2.name||top2.num}（${t2p}番人気）→ オッズ5倍以上が見込める`});
+    }
+    reasons.push({icon:'💰',text:'ワイド1点勝負（点数を増やすほど回収率は下がる）'});
+    if(t1p>=2&&t1p<=4)reasons.push({icon:'✅',text:'軸は2-4番人気から選定（期待値のバランスが最適）'});
+  }
+
+  // トラックバイアス情報
+  const bl=biasLabel||'';
+  const sl=speedLabel||'';
+  if(bl&&sl){
+    const biasDesc=bl==='内有利'?(sl==='高速'?'開幕週・内枠先行有利（パターンA）':'内枠有利だがパワー型が浮上（パターンC）')
+      :bl==='外有利'?(sl==='タフ'?'開催後半・外差し有利（パターンB）':'外差し×スピード型（パターンD）')
+      :'内外フラット → 能力比較が主（バイアス補正小）';
+    reasons.push({icon:'🏟️',text:`馬場: ${sl}/${bl} → ${biasDesc}`});
+  }
+
+  return{raceType,picks:{axis:picks.axis?.num||null,partner:picks.partner?.num||null,ana:picks.ana?.num||null},bet,reasons,biasLabel,speedLabel};
 }
 
 // ===== SCORING =====
@@ -3971,6 +4033,15 @@ function renderDetail(id){
         </div>`;
       });
       h+=`<div style="font-size:14px;font-weight:900;margin-top:8px">合計${v6c}円</div>`;
+      // 戦略判断の理由を表示
+      if(v6.reasons?.length>0){
+        h+=`<div style="margin-top:10px;padding:10px 12px;background:rgba(0,0,0,.03);border-radius:6px;border-left:3px solid ${tC[v6t]}">`;
+        h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);margin-bottom:6px">📋 判断根拠</div>`;
+        v6.reasons.forEach(r=>{
+          h+=`<div style="font-size:12px;color:var(--lt);margin-bottom:3px;line-height:1.5">${r.icon} ${r.text}</div>`;
+        });
+        h+=`</div>`;
+      }
       if(axH){
         const axSf=axH.v6sf!=null?axH.v6sf:calcSixFactorV6(axH,r.info).score;
         h+=`<div style="background:var(--p2);border-radius:6px;padding:10px 12px;margin-top:10px">`;
@@ -3996,6 +4067,14 @@ function renderDetail(id){
       h+=`<h3 style="color:var(--dim)">📊 統合推奨馬券</h3>`;
       h+=`<div style="font-size:16px;font-weight:900;color:var(--dim);margin-bottom:6px">⏭ このレースは見送り</div>`;
       h+=`<div style="font-size:12px;color:var(--dim)">${v6r||'購入条件を満たす馬なし'}</div>`;
+      if(v6.reasons?.length>0){
+        h+=`<div style="margin-top:10px;padding:10px 12px;background:rgba(0,0,0,.03);border-radius:6px;border-left:3px solid var(--dim)">`;
+        h+=`<div style="font-size:11px;font-weight:700;color:var(--dim);margin-bottom:6px">📋 判断根拠</div>`;
+        v6.reasons.forEach(r=>{
+          h+=`<div style="font-size:12px;color:var(--lt);margin-bottom:3px;line-height:1.5">${r.icon} ${r.text}</div>`;
+        });
+        h+=`</div>`;
+      }
       h+=`</div>`;
     }
 
