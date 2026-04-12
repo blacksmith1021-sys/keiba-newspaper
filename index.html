@@ -3177,7 +3177,7 @@ function renderList(){
       const hi=getHitInfo(r);
       const isSkip=hi.skip;
       const cls=hasR?(isSkip?'pend':hi.anyHit?'hit':'miss'):'pend';
-      const betInfo=(!isSkip&&r.bet?.best)?r.bet.best.type+' '+r.bet.best.desc:'';
+      const betInfo=(!isSkip&&r.v6?.bet?.bets?.length>0)?r.v6.bet.bets.map(b=>b.kind+' '+b.desc).join(' ／ '):(!isSkip&&r.bet?.best)?r.bet.best.type+' '+r.bet.best.desc:'';
       const inv=hi.inv||0;
       let profitStr='';
       if(hasR&&!isSkip){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
