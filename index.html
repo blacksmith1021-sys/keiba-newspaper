@@ -1576,658 +1576,13 @@ hs.forEach(h=>{
   h.adjDetail=adjDetail;
   h.adjDelta=adj;
 });
-// 6因子スコア（人気を含まない）を全馬に付与
-hs.forEach(h=>{
-  const st=calcStatScore(h,inf);
-  h.statNs=st.score;
-  h.statDetail=st.detail;
-  // 推定好走率（人気×6因子帯）
-  const pop=h.pop||0;
-  if(pop>=1){const [wr,pr]=getEstimatedRates(pop,st.score);h.estWr=wr;h.estPr=pr;h.statRate=Math.round(pr*1000)/10}
-  else{h.estWr=0;h.estPr=0;h.statRate=0}
-});
-// 6因子順位
-const statSorted=[...hs].sort((a,b)=>b.statNs-a.statNs);
-statSorted.forEach((h,i)=>{h.statRank=i+1});
-// 人気の盲点フラグ
-hs.forEach(h=>{h.isBlindSpot=h.pop>=4&&h.statRank<=3});
-// 穴馬判定（v4）
-hs.forEach(h=>{
-  const af=calcAnaFactor(h);
-  h.anaFactor=af?af.score:null;
-  h.anaDetail=af?af.detail:[];
-  h.isAnaUma=af!==null&&af.score>=4;
-});
 // V6: パターン検出
 hs.forEach(h=>detectPatternsV6(h));
 // 補正スコアでソート（印の割り当てに影響）
 hs.sort((a,b)=>b.adjScore-a.adjScore);
 return hs}
 
-// ===== 回収率モデル v3（CLAUDE.md: 6因子+期待値+前走補正） =====
-const STAT_TOP9_JOCKEYS=['C.ルメール','Ｃ．ルメール','川田 将雅','戸崎 圭太','岩田 望来','R.キング','西村 淳也','坂井 瑠星','武 豊','松山 弘平'];
-
-// --- 6因子スコア（人気を含まない: オッズとの二重カウント防止） ---
-function calcStatScore(h,raceInfo){
-  let s=0;const detail=[];
-  const jk=(h.jk||'').replace(/[\s　]+/g,' ').trim();
-  if(STAT_TOP9_JOCKEYS.some(j=>j.replace(/[\s　]+/g,' ')===jk)){s+=15;detail.push('騎手+15')}
-  const wt=h.wt||0;
-  if(wt>=520){s+=8;detail.push('520kg+8')}else if(wt>=480){s+=5;detail.push('480kg+5')}else if(wt>=460){s+=2}else if(wt>0&&wt<440){s-=8;detail.push('<440kg-8')}
-  const imp=h.imp||0;
-  if(imp>=57){s+=5;detail.push('斤量+5')}else if(imp>0&&imp<54){s-=8;detail.push('斤量-8')}
-  // --- トラックバイアス補正（枠順 × 馬場バイアス） ---
-  const course=raceInfo?.type||'';const dist=raceInfo?.dist||0;const gate=h.num||0;
-  if(course==='芝'&&gate>0){
-    const runners=16;
-    const isInnerGate=gate<=Math.ceil(runners*0.25);
-    const isOuterGate=gate>=Math.ceil(runners*0.75);
-    const km=(raceInfo?.course||'').match(/(\d+)日/);
-    const kd=km?parseInt(km[1]):4;
-    const cv=raceInfo?.cond||'良';
-    let bi=0;
-    if(kd<=2)bi=2;else if(kd>=6)bi=-2;
-    if(cv==='重'||cv==='不良')bi-=1;
-    if(bi>=2){
-      if(isInnerGate){s+=6;detail.push('内枠×内有利+6')}
-      else if(isOuterGate){s-=4;detail.push('外枠×内有利-4')}
-    }else if(bi<=-2){
-      if(isOuterGate){s+=4;detail.push('外枠×外有利+4')}
-      else if(isInnerGate){s-=3;detail.push('内枠×外有利-3')}
-    }else{
-      if(dist>=1500){
-        if(isInnerGate){s+=2;detail.push('内枠+2')}
-        else if(isOuterGate){s-=2;detail.push('外枠-2')}
-      }
-    }
-  }else if(course==='ダート'&&gate>0){
-    if(dist>=1500&&gate<=3){s+=2;detail.push('ダ内枠+2')}
-  }
-  // --- 脚質×馬場コンディション補正 ---
-  const prevPos=h.prev?.[0]?.pos;
-  const firstPos=prevPos?.[0]||0;
-  const isLeader=firstPos>0&&firstPos<=3;
-  const isCloser=firstPos>=8;
-  const cv2=raceInfo?.cond||'良';
-  const st2=raceInfo?.type||'芝';
-  const hs2=(st2==='芝')?(cv2==='良'||cv2==='稍重'):(cv2==='重'||cv2==='不良');
-  const tf2=!hs2;
-  const km2=(raceInfo?.course||'').match(/(\d+)日/);
-  const kd2=km2?parseInt(km2[1]):4;
-  let bi2=0;if(st2==='芝'){if(kd2<=2)bi2=2;else if(kd2>=6)bi2=-2;if(cv2==='重'||cv2==='不良')bi2-=1}
-  if(hs2&&isLeader){s+=3;detail.push('高速場×先行+3')}
-  else if(tf2&&isCloser){s+=3;detail.push('タフ場×差し+3')}
-  else if(hs2&&isCloser&&bi2>=2){s-=3;detail.push('高速内有利×追込-3')}
-  else if(tf2&&isLeader&&bi2<=-2){s-=2;detail.push('タフ外有利×先行-2')}
-  const sex=h.sex||'';
-  if(sex==='牡'){s+=3;detail.push('牡+3')}else if(sex==='牝'){s-=3;detail.push('牝-3')}
-  const wc=h.wc;
-  if(wc!=null){if(Math.abs(wc)<=3){s+=3;detail.push('安定+3')}else if(Math.abs(wc)>=10){s-=5;detail.push('変動-5')}}
-  return{score:s,detail};
-}
-
-// --- 推定好走率テーブル（人気 × 6因子帯） ---
-// 推定好走率テーブル v3（12,502走検証 / 人気×6因子帯→[勝率,3着内率]）
-const EV_RATE_TABLE={
-  '1_高':[.397,.772],'1_中':[.330,.708],'1_低':[.318,.605],
-  '2_高':[.215,.599],'2_中':[.169,.529],'2_低':[.176,.476],
-  '3_高':[.160,.502],'3_中':[.125,.388],'3_低':[.137,.413],
-  '4_高':[.109,.391],'4_中':[.092,.319],'4_低':[.076,.318],
-  '5_高':[.090,.307],'5_中':[.064,.257],'5_低':[.056,.226],
-  '6_高':[.063,.174],'6_中':[.051,.215],'6_低':[.074,.239],
-  '7_高':[.039,.195],'7_中':[.036,.141],'7_低':[.030,.108],
-  '8_高':[.026,.099],'8_中':[.021,.145],'8_低':[.026,.089],
-  '9_高':[.036,.111],'9_中':[.022,.093],'9_低':[.007,.074],
-  '10+':[.015,.076],'11+':[.009,.047],'12+':[.005,.030],
-};
-const EST_ODDS={1:2.5,2:4.5,3:7.0,4:11.0,5:16.0,6:22.0,7:32.0,8:45.0,9:60.0,10:80.0,11:100,12:130,13:160,14:200,15:250,16:300,17:350,18:400};
-function getFactorTier(sf,pop){
-  if(pop<=5)return sf>=16?'高':sf>=8?'中':'低';
-  return sf>=13?'高':sf>=3?'中':'低';
-}
-function getEstimatedRates(pop,sf){
-  if(pop>=12)return EV_RATE_TABLE['12+']||[.005,.030];
-  if(pop>=11)return EV_RATE_TABLE['11+']||[.009,.047];
-  if(pop>=10)return EV_RATE_TABLE['10+']||[.015,.076];
-  const tier=getFactorTier(sf,pop);
-  return EV_RATE_TABLE[pop+'_'+tier]||[.005,.030];
-}
-
-// --- 穴馬判定（v4: 6番人気以下の好走確率を引き上げる5因子） ---
-function calcAnaFactor(h){
-  const pop=h.pop||0;
-  if(pop>=1&&pop<=5)return null; // 人気馬には適用しない
-  let s=0;const detail=[];
-  if(STAT_TOP9_JOCKEYS.some(j=>j.replace(/[\s　]+/g,' ')===(h.jk||'').replace(/[\s　]+/g,' ').trim())){s++;detail.push('TOP9騎手')}
-  if((h.wt||0)>=480){s++;detail.push('480kg↑')}
-  if(h.wc!=null&&Math.abs(h.wc)<=6){s++;detail.push('体重安定')}
-  if(h.sex==='牡'||h.sex==='せん'){s++;detail.push(h.sex==='牡'?'牡馬':'せん馬')}
-  if((h.imp||0)>=55){s++;detail.push('斤量55↑')}
-  return{score:s,detail};
-}
-function isAnaUma(h){
-  const af=calcAnaFactor(h);
-  return af!==null&&af.score>=4;
-}
-
-// --- 前走スコア（簡易版） ---
-function calcPrevScore(h){
-  const l=h.prev?.[0];if(!l||!l.fin)return null;
-  let s=0;
-  if(l.fin<=3)s+=36-(l.fin-1)*6;else if(l.fin<=5)s+=18-(l.fin-4)*6;else if(l.fin<=8)s+=6;
-  if(h.f?.['距離']?.c==='g')s+=8;
-  if(h.f?.['コース']?.c==='g')s+=4;
-  if(h.f?.['競馬場']?.c==='g')s+=4;
-  if(l.run&&l.fin<=3){if(l.run>=14)s+=6;else if(l.run>=10)s+=3}
-  return s;
-}
-
-// --- 前走補正 ---
-function adjustRateByPrev(wr,pr,prevScore){
-  if(prevScore==null)return[wr,pr];
-  let m=1.0;
-  if(prevScore>=40)m=1.20;else if(prevScore>=25)m=1.10;else if(prevScore<10)m=0.85;
-  return[Math.min(wr*m,.60),Math.min(pr*m,.90)];
-}
-
-// --- 期待値判定（1馬分） ---
-function judgeHorse(h,raceInfo){
-  const pop=h.pop;const sf=h.statNs||0;
-  const prevScore=calcPrevScore(h);
-  const existing=(h.adjNs!=null?h.adjNs:h.ns)||0;
-  const hasExisting=existing>=70;
-  // オッズ
-  let odds=h.odds||h._resultOdds||0;
-  let oddsSrc='実績';
-  if(!odds&&pop){odds=EST_ODDS[Math.min(pop,10)]||100;oddsSrc='推定'}
-  if(!odds||!pop)return{verdict:'SKIP',reason:'データ不足',ev:0,wr:0,pr:0,odds:0,oddsSrc:'',sf,prevScore,existing};
-  // 推定好走率
-  const [baseWr,basePr]=getEstimatedRates(pop,sf);
-  const [adjWr,adjPr]=adjustRateByPrev(baseWr,basePr,prevScore);
-  // 期待値
-  const ev=adjWr*odds-1;
-  // 判定
-  let verdict;
-  if(ev>0.05)verdict=hasExisting?'EDGE':'BET';
-  else if(ev>-0.05&&hasExisting)verdict='BET';
-  else verdict='SKIP';
-  // 推定オッズのみの場合、閾値を厳しくする
-  if(oddsSrc==='推定'&&ev<0.15)verdict='SKIP';
-  return{verdict,ev,wr:adjWr,pr:adjPr,odds,oddsSrc,sf,prevScore,existing};
-}
-
-// ===== v6: 穴馬パターン検出（STEP 3） =====
-// 巻き返し: 前走人気<=5 && 前走着順>=4 && 今走人気>=6（好走率17%、平均の1.8倍）
-// 実績降格: 前走人気<=5 && 前走着順<=3 && 今走人気>=6（好走率23.5%、平均の2.6倍）
-// 隠れ末脚: 前走上がりrank<=3 && 今走人気>=6（好走率15.6%、平均の1.7倍）
-function detectPatterns(h){
-  h.巻き返し=false;h.実績降格=false;h.隠れ末脚=false;
-  const pop=h.pop||0;
-  if(pop<6)return;
-  const p=h.prev?.[0];
-  if(!p)return;
-  if(p.prevPop&&p.prevPop<=5&&p.fin>=4)h.巻き返し=true;
-  if(p.prevPop&&p.prevPop<=5&&p.fin>=1&&p.fin<=3)h.実績降格=true;
-  if(h._prevAgariRank&&h._prevAgariRank<=3)h.隠れ末脚=true;
-}
-// 全馬の前走上がりrankを算出してdetectPatternsを実行
-function applyPatterns(horses){
-  const withF3=horses.filter(h=>h.prev?.[0]?.f3).map(h=>({h,f3:h.prev[0].f3}));
-  withF3.sort((a,b)=>a.f3-b.f3);
-  withF3.forEach((x,i)=>{x.h._prevAgariRank=i+1});
-  horses.forEach(detectPatterns);
-}
-
-// ===== v6: レース3分類（STEP 4） =====
-// SOLID: ◎sf>=20 かつ パターン馬なし → 堅いレース（W1点100円）
-// UPSET: パターン馬あり → 荒れ予兆（W+馬連+複勝 最大300円）
-// SKIP : それ以外 → 見送り
-function classifyRace(horses){
-  if(!horses||!horses.length)return'SKIP';
-  const fav1=horses.find(h=>h.pop===1);
-  const fav1_sf=fav1?(fav1.statNs||0):0;
-  const hasPattern=horses.some(h=>h.巻き返し||h.実績降格||h.隠れ末脚);
-  if(fav1_sf>=20&&!hasPattern)return'SOLID';
-  if(hasPattern)return'UPSET';
-  return'SKIP';
-}
-
-// --- レース推奨生成（モード自動切替: オッズあり→回収率 / なし→スコア） ---
-function buildIntegratedBet(scored,raceInfo){
-  if(!scored||scored.length===0)return null;
-  const hasRealOdds=scored.some(h=>h.odds&&h.odds>0);
-  const mode=hasRealOdds?'ROI':'SCORE';
-  const sf=h=>h.statNs||0;
-
-  // 全馬の基礎データを構築
-  const horses=scored.map(h=>{
-    const j=judgeHorse(h,raceInfo);
-    const prevScore=calcPrevScore(h);
-    const intScore=(h.statNs||0)+(prevScore>=40?15:prevScore>=25?8:prevScore>=10?3:0);
-    return{...h,verdict:j.verdict,ev:j.ev,estWr:j.wr,estPr:j.pr,
-      evOdds:j.odds,oddsSrc:j.oddsSrc,prevScore,intScore,sMark:'△',sLabel:'押さえ'};
-  });
-
-  // v6 STEP3: 穴馬パターン検出（巻き返し/実績降格/隠れ末脚）
-  applyPatterns(horses);
-
-  // ===== v5: 印の決定（◎は必ず1-3番人気から） =====
-  const used=new Set();
-  const picks=[];
-
-  // ◎: 1-3番人気の中で6因子最高
-  const tier1=horses.filter(h=>h.pop>=1&&h.pop<=3).sort((a,b)=>sf(b)-sf(a));
-  // フォールバック: 1-3番人気がいなければ4-5番人気
-  const tier1fb=tier1.length>0?tier1:horses.filter(h=>h.pop>=1&&h.pop<=5).sort((a,b)=>sf(b)-sf(a));
-  if(tier1fb.length>0){
-    tier1fb[0].sMark='◎';tier1fb[0].sLabel='本命';
-    picks.push(tier1fb[0]);used.add(tier1fb[0].num);
-  }
-
-  // ○: 1-5番人気で◎以外の6因子最高
-  const tier2=horses.filter(h=>h.pop>=1&&h.pop<=5&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
-  if(tier2.length>0){
-    tier2[0].sMark='○';tier2[0].sLabel='対抗';
-    picks.push(tier2[0]);used.add(tier2[0].num);
-  }
-
-  // ▲: 1-5番人気で◎○以外の6因子最高
-  const tier3=horses.filter(h=>h.pop>=1&&h.pop<=5&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a));
-  if(tier3.length>0){
-    tier3[0].sMark='▲';tier3[0].sLabel='単穴';
-    picks.push(tier3[0]);used.add(tier3[0].num);
-  }
-
-  // 穴: v6パターン馬の最有力（実績降格 > 巻き返し > 隠れ末脚）
-  const anaPicker=(pred)=>horses.filter(h=>pred(h)&&!used.has(h.num)).sort((a,b)=>sf(b)-sf(a))[0];
-  const anaCand=anaPicker(h=>h.実績降格)||anaPicker(h=>h.巻き返し)||anaPicker(h=>h.隠れ末脚);
-  const tierAna=anaCand?[anaCand]:[];
-  if(tierAna.length>0&&picks.length<4){
-    tierAna[0].sMark='穴';tierAna[0].sLabel='穴';
-    picks.push(tierAna[0]);used.add(tierAna[0].num);
-  }
-
-  // 残りは△
-  horses.forEach(h=>{if(!used.has(h.num)){h.sMark='△';h.sLabel=''}});
-
-  // ===== 回収率モード: EVフィルタ =====
-  if(mode==='ROI'&&picks.length>0){
-    // 各pickのEVを計算
-    picks.forEach(h=>{
-      const [wr]=getEstimatedRates(h.pop||9,h.statNs||0);
-      let mult=1.0;
-      if(h.prevScore>=40)mult=1.20;else if(h.prevScore>=25)mult=1.10;
-      else if(h.prevScore!=null&&h.prevScore<10)mult=0.85;
-      h.estWr=Math.min(wr*mult,.60);
-      h.ev=h.evOdds?h.estWr*h.evOdds-1:0;
-    });
-    // 全員EV-10%以下なら見送り
-    if(picks.every(h=>h.ev<-0.10)){
-      return{action:'SKIP',reason:'最高EV: '+(Math.max(...picks.map(h=>h.ev))*100).toFixed(1)+'%',bestEv:Math.max(...picks.map(h=>h.ev)),horses,mode};
-    }
-  }
-
-  // ===== v6 STEP6: 式別自動選択（レース3分類で分岐） =====
-  if(picks.length===0)return{action:'SKIP',reason:'該当馬なし',bestEv:0,horses,mode};
-  const axis=picks[0]; // ◎（必ず1-3番人気）
-  const partner=picks[1]; // ○
-  const ana=picks.find(p=>p.sMark==='穴');
-  const bets=[];
-
-  if(!axis)return{action:'SKIP',reason:'◎不在',bestEv:0,horses,mode};
-
-  // レース分類
-  const raceType=classifyRace(horses);
-
-  if(raceType==='SKIP'){
-    return{action:'SKIP',reason:'見送り（堅い条件なし/穴パターン馬なし）',raceType,horses,mode,bets:[]};
-  }
-
-  if(raceType==='SOLID'){
-    // 堅いレース: ワイド ◎—○ 100円のみ
-    if(!partner)return{action:'SKIP',reason:'○不在',raceType,horses,mode};
-    const w1=[Math.min(axis.num,partner.num),Math.max(axis.num,partner.num)];
-    bets.push({type:'ワイド',cost:100,target:w1.join('—'),ev:0,desc:w1.join('—'),note:'堅実'});
-  }else if(raceType==='UPSET'){
-    // 荒れ予兆: ワイド ◎—穴 100円
-    if(!ana)return{action:'SKIP',reason:'穴馬不在',raceType,horses,mode};
-    const w=[Math.min(axis.num,ana.num),Math.max(axis.num,ana.num)];
-    bets.push({type:'ワイド',cost:100,target:w.join('—'),ev:0,desc:w.join('—'),note:'穴狙い'});
-    // ◎sf>=20 なら馬連も追加
-    if((axis.statNs||0)>=20){
-      bets.push({type:'馬連',cost:100,target:w.join('—'),ev:0,desc:w.join('—'),note:'◎強い'});
-    }
-    // 穴馬が実績降格なら複勝も追加
-    if(ana.実績降格){
-      bets.push({type:'複勝',cost:100,target:String(ana.num),ev:0,desc:String(ana.num),note:'実績降格'});
-    }
-  }
-
-  const strategy=raceType==='SOLID'?'堅い（W1点）':'穴（W+α）';
-  return{action:'BET',strategy,raceType,axis,partners:picks.slice(1),bets,horses,nEdge:0,nBet:picks.length,mode};
-}
-
-// 後方互換: statScoreToRate（旧コードから参照される場合用）
-function statScoreToRate(s){
-  if(s>=71)return 77.8;if(s>=61)return 66.3;if(s>=51)return 60.0;
-  if(s>=41)return 51.1;if(s>=31)return 42.6;if(s>=21)return 33.7;
-  if(s>=11)return 25.5;if(s>=1)return 15.3;if(s>=-9)return 10.0;
-  return 4.4;
-}
-
-// ===== BET (v21: 単勝・馬連・ワイドの3択、レース質判定) =====
-function getHorseStatBonus(horse,raceInfo){
-  const reasons=[];
-  let bonus=0;
-  const jk=horse.jk||'';
-  const tr=horse.trainer||'';
-  const surf=raceInfo?.type||'';
-  const dist=raceInfo?.dist||0;
-  const venue=(raceInfo?.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
-  let jkTotal=0,jkW3=0,trTotal=0,trW3=0;
-  RACES.forEach(r=>{
-    const top3=(r.result?.top3||[]).map(n=>+n);
-    (r.scored||[]).forEach(h=>{
-      const rank=h._resultRank||(top3.length>=3&&top3.includes(h.num)?top3.indexOf(h.num)+1:0);
-      if(!rank)return;
-      if(jk&&h.jk===jk){jkTotal++;if(rank<=3)jkW3++}
-      if(tr&&h.trainer===tr){trTotal++;if(rank<=3)trW3++}
-    });
-    (r.result?.allResults||[]).forEach(ar=>{
-      const sc=(r.scored||[]).find(h=>h.num===ar.num);
-      const arJk=ar.jockey||sc?.jk||'';
-      const arTr=ar.trainer||sc?.trainer||'';
-      if(jk&&arJk===jk){jkTotal++;if(ar.rank<=3)jkW3++}
-      if(tr&&arTr===tr){trTotal++;if(ar.rank<=3)trW3++}
-    });
-  });
-  if(jkTotal>=3){const rate=jkW3/jkTotal;if(rate>=0.40){bonus+=15;reasons.push(jk+'複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate>=0.28){bonus+=8;reasons.push(jk+'複勝率'+Math.round(rate*100)+'%('+jkTotal+'走)')}else if(rate<0.15)bonus-=8}
-  if(trTotal>=3){const rate=trW3/trTotal;if(rate>=0.45){bonus+=12;reasons.push(tr+'厩舎複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.33){bonus+=6;reasons.push(tr+'厩舎複勝率'+Math.round(rate*100)+'%')}else if(rate<0.15)bonus-=6}
-  if(horse.name&&HORSE_DB[horse.name]){
-    const hist=HORSE_DB[horse.name];
-    const cond=hist.filter(x=>x.surface===surf&&x.dist&&Math.abs(x.dist-dist)<=200);
-    if(cond.length>=2){const w3=cond.filter(x=>x.rank<=3).length;const rate=w3/cond.length;if(rate>=0.5){bonus+=12;reasons.push('条件複勝率'+Math.round(rate*100)+'%')}else if(rate>=0.33)bonus+=6}
-    if(venue){const vm=hist.filter(x=>x.venue===venue);if(vm.length>=2&&vm.filter(x=>x.rank<=3).length/vm.length>=0.5){bonus+=8;reasons.push(venue+'複勝率高')}}
-  }
-  // ns への代入は絶対にしない
-  return{bonus,reasons};
-}
-
-// デバッグ: ブラウザコンソールで genBet(RACES[0].scored, RACES[0].info) を実行して確認可能
-function genBet(scored,raceInfo,marketOdds){
-  const marks=['◎','○','▲','△','×'];
-  const eU=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.4*100)/100};
-  const eW=(a,b)=>{if(!a?.odds||!b?.odds)return 0;return Math.round(a.odds*b.odds*0.15*100)/100};
-
-  // ===== ① レース質スコア =====
-  // 各条件でマイナス点を積み、合計が閾値を超えたら見送り
-  const raceQuality={score:0,reasons:[]};
-  const headCount=scored.length;
-
-  // 出走頭数が少ない
-  if(headCount<=6){raceQuality.score-=30;raceQuality.reasons.push('少頭数（'+headCount+'頭）')}
-  else if(headCount<=8){raceQuality.score-=15;raceQuality.reasons.push('小頭数（'+headCount+'頭）')}
-  // 頭数補正（統計: 少頭数ほど高スコア馬が活きる）
-  if(headCount<=10){raceQuality.score+=10;raceQuality.reasons.push('少頭数有利('+headCount+'頭)')}
-  else if(headCount>=17){raceQuality.score-=8;raceQuality.reasons.push('多頭数('+headCount+'頭)予測精度低下')}
-
-  // 各馬に推定オッズ・期待値を付与
-  scored.forEach(h=>{
-    h._estOdds=estimateOdds(h);
-    h._estW3Prob=estimateW3Prob(h);
-    h._ev=h._estOdds>0&&h._estW3Prob>0?Math.round(h._estW3Prob*h._estOdds*100)/100:0;
-  });
-  // 断然1番人気（単勝2倍未満）：的中しても配当が低い
-  const favHorse=scored.slice().sort((a,b)=>(a._estOdds||999)-(b._estOdds||999))[0];
-  const favOdds=favHorse?._estOdds||99;
-  const hasOddsData=scored.some(h=>h._estOdds&&h._estOdds>0);
-  if(hasOddsData){
-    if(favOdds<1.5){raceQuality.score-=40;raceQuality.reasons.push('断然人気('+favOdds+'倍)')}
-    else if(favOdds<2.0){raceQuality.score-=25;raceQuality.reasons.push('強い1番人気('+favOdds+'倍)')}
-    else if(favOdds<2.5){raceQuality.score-=10;raceQuality.reasons.push('1番人気('+favOdds+'倍)')}
-  }
-
-  // 上位2頭のスコア差が小さい（甲乙つけがたい混戦）
-  const top2=scored.slice(0,2);
-  if(top2.length>=2){
-    const scoreDiff=top2[0].ns-top2[1].ns;
-    if(scoreDiff<=5){raceQuality.score-=20;raceQuality.reasons.push('上位2頭スコア差小('+scoreDiff+')')}
-    else if(scoreDiff<=10){raceQuality.score-=10;raceQuality.reasons.push('上位差やや小('+scoreDiff+')')}
-  }
-
-  // 蓄積データのある馬が少ない（予測根拠が薄い）
-  const withHistory=scored.filter(h=>h.f['蓄積']||h.prev?.length>=2).length;
-  const histRate=withHistory/Math.max(headCount,1);
-  if(histRate<0.3){raceQuality.score-=20;raceQuality.reasons.push('データ不足('+withHistory+'頭のみ)')}
-  else if(histRate<0.5){raceQuality.score-=10;raceQuality.reasons.push('データ少('+withHistory+'頭)')}
-
-  // スコア1位の絶対値が低い（全馬の実力が僅差）
-  if(scored[0]?.ns<60){raceQuality.score-=15;raceQuality.reasons.push('スコア低(top:'+scored[0]?.ns+')')}
-
-  // 補正スコアと統計スコアの乖離チェック（統計: 乖離時の着外リスク高）
-  const topHorse=scored[0];
-  if(topHorse){
-    const adjNs=topHorse.adjNs||topHorse.ns||0;
-    const statNs=topHorse.statNs||0;
-    // 補正スコアが高い（80+）のに統計スコアが低い（5以下）→過信リスク
-    if(adjNs>=80&&statNs<=5){
-      raceQuality.score-=12;
-      raceQuality.reasons.push('軸馬スコア乖離(補正'+adjNs+'/統計'+statNs+')');
-    }
-    // 両方高い（補正80+ & 統計20+）→高信頼
-    else if(adjNs>=80&&statNs>=20){
-      raceQuality.score+=8;
-      raceQuality.reasons.push('軸馬高信頼(補正'+adjNs+'/統計'+statNs+')');
-    }
-  }
-
-  // レース質判定：-40以下で見送り
-  const poorRace=raceQuality.score<=-40;
-
-  // オッズデータがある場合のみ除外、なければ全馬対象
-  const excluded=[];
-  const eligible=scored;
-  const useEligible=eligible;
-
-  function stableScore(h){
-    let s=0;
-    if(h.prev?.length>0){
-      const board=h.prev.filter(p=>p.fin<=5).length;
-      s+=board*15;const l=h.prev[0];
-      if(l&&l.fin<=3)s+=12;else if(l&&l.fin<=5)s+=6;else if(l&&l.fin<=8)s+=2;
-      if(l?.gap!=null){if(l.gap<=0.3)s+=12;else if(l.gap<=0.6)s+=8;else if(l.gap<=1.0)s+=4;else if(l.gap>2.0)s-=6}
-    }
-    if(h.f['距離']?.c==='g')s+=10;if(h.f['コース']?.c==='g')s+=8;
-    if(h.f['上がり']?.c==='g')s+=6;if(h.f['トレンド']?.c==='g')s+=8;
-    if(h.f['馬場']?.c==='g')s+=5;if(h.f['競馬場']?.c==='g')s+=5;
-    if(h.f['間隔']?.c==='g')s+=3;
-    if(h.rec){const tot=h.starts||1;const fr=(h.rec.w+h.rec.s+h.rec.t)/tot;if(fr>=0.4)s+=10;else if(fr>=0.25)s+=5}
-    return s;
-  }
-  function whyPick(h){
-    const r=[];if(h.prev?.length>0){const board=h.prev.filter(p=>p.fin<=5).length;const l=h.prev[0];
-    if(l&&l.fin<=3)r.push('前走'+l.fin+'着/'+l.run+'頭');else if(l&&l.fin<=5)r.push('前走'+l.fin+'着');else if(l)r.push('前走'+l.fin+'着/'+l.run+'頭');
-    if(board>=2)r.push('掲示板'+board+'回');if(l?.gap!=null&&l.gap<=0.6)r.push('着差'+l.gap+'秒');}
-    if(h.f['距離']?.c==='g')r.push('同距離');if(h.f['コース']?.c==='g')r.push('コース○');
-    if(h.f['トレンド']?.c==='g')r.push('トレンド↑');if(h.f['競馬場']?.c==='g')r.push('同競馬場');
-    if(h.f['馬場']?.c==='g')r.push('馬場一致');
-    if(h.rec?.w>0)r.push('勝利有');const rank=scored.indexOf(h);if(rank>=0&&rank<5)r.push(marks[rank]);
-    if(!r.length)r.push('総合スコア');return r;
-  }
-
-  // 統計ボーナスを付与（ns は変更しない、ソート順も変えない）
-  scored.forEach(h=>{
-    try{
-      const sb=getHorseStatBonus(h,raceInfo);
-      h.statBonus=sb.bonus||0;
-      h.statReasons=sb.reasons||[];
-      h.totalScore=(h.ns||0)+Math.round((sb.bonus||0)*0.5);
-      if(sb.bonus!==0||sb.reasons.length>0)console.log('[StatBonus]',h.name,'ns:',h.ns,'bonus:',sb.bonus,'reasons:',sb.reasons);
-    }catch(e){
-      h.statBonus=0;h.statReasons=[];h.totalScore=h.ns||0;
-      console.warn('[StatBonus error]',h.name,e.message);
-    }
-  });
-
-  const stables=useEligible.map(h=>({h,ss:stableScore(h)})).sort((a,b)=>b.ss-a.ss);
-
-  // ===== 軸馬選定（ns基準） =====
-  const STRONG_F=['前走','着差','上がり','トレンド','距離','コース','馬場','競馬場'];
-  function countG(h){return STRONG_F.filter(k=>h.f?.[k]?.c==='g').length}
-  const himoPool=scored.filter(h=>h.ns>=50&&h.ns<80).sort((a,b)=>b.ns-a.ns);
-  // 軸馬: 補正スコア(adjNs)基準（人気・オッズに依存しない）
-  const useNs=h=>h.adjNs!=null?h.adjNs:h.ns;
-  let A=scored.find(h=>useNs(h)>=80)||scored.find(h=>useNs(h)>=50)||null;
-  let B=scored.filter(h=>h!==A).find(h=>useNs(h)>=50)||scored.filter(h=>h!==A)[0]||null;
-  let C=scored.filter(h=>h!==A&&h!==B).find(h=>useNs(h)>=50)||null;
-
-  // ===== レース質判定（補正スコア使用） =====
-  const topNs=useNs(scored[0])||0;
-  const nsDiff=scored.length>=2?(useNs(scored[0])-useNs(scored[1])):0;
-  const top3=scored.slice(0,3);
-  const top3diff=top3.length>=3?(useNs(top3[0])-useNs(top3[2])):99;
-  // 3パターン判定（補正スコアで判定、人気・オッズに依存しない）
-  const isAxisClear=A&&useNs(A)>=80&&nsDiff>=10;
-  const isMixedRace=scored.length>=3&&top3diff<=8;
-  const isStandard=!isAxisClear&&!isMixedRace&&A&&useNs(A)>=50;
-
-  // 見送り判定
-  let budgetOver=false;
-  if(typeof getDailyBudget==='function'&&typeof getTodayInvested==='function'){
-    if(getDailyBudget()-getTodayInvested()<100)budgetOver=true;
-  }
-  let skipRecommended=topNs<50||budgetOver;
-  if(!A||!B)skipRecommended=true;
-
-  // 信頼度
-  const axisG=A?countG(A):0;
-  let confidence='',confLevel=1;
-  if(axisG>=5){confidence='★★★ 高';confLevel=3}
-  else if(axisG>=3){confidence='★★ 中';confLevel=2}
-  else{confidence='★ 低';confLevel=1}
-
-  const skipReason=budgetOver?'本日の予算上限に到達':topNs<50?'最高スコア不足('+topNs+')':(!A||!B)?'候補馬不足':'条件を満たす買い目なし';
-
-  if(!A||!B){
-    return{best:null,tickets:[],fav:favHorse,excluded,confidence,confLevel,
-      fukushoHorse:null,totalInv:0,wideAmount:0,fukAmount:0,raceQuality,
-      patName:'候補不足',patReason:skipReason,warning:'候補馬不足',skipRecommended:true,alternatives:[]};
-  }
-
-  const favStableRank=stables.findIndex(x=>x.h===favHorse);
-  const favInEligible=favStableRank>=0;
-  const favIsOverrated=!favInEligible||(favStableRank>=2);
-  const favIsLegit=favInEligible&&favStableRank<=1;
-
-  const estU=eU(A,B);
-  const estW=C?eW(B,C):0;
-
-  // ===== 馬券選択: 単勝・馬連・ワイドの3択 =====
-  const mktOdds=marketOdds||{tansho:{},umaren:{},wide:{}};
-  const hasMarket=Object.values(mktOdds).some(v=>v&&Object.keys(v).length>0);
-
-  function getActualOdds(type,horses){
-    if(type==='単勝'){const k=String(horses[0]?.num);return mktOdds.tansho?.[k]!=null?mktOdds.tansho[k]:null;}
-    const nums=horses.map(x=>x.num).sort((a,b)=>a-b);const key=nums.join('-');
-    if(type==='馬連')return mktOdds.umaren?.[key]!=null?mktOdds.umaren[key]:null;
-    if(type==='ワイド')return mktOdds.wide?.[key]!=null?mktOdds.wide[key]:null;
-    return null;
-  }
-
-  let tickets=[];
-  // レース質タイプ名
-  let raceType='見送り';
-
-  if(!skipRecommended){
-    const partners=[B,C,...himoPool.filter(h=>h!==A&&h!==B&&h!==C)].filter(Boolean);
-
-    if(isAxisClear){
-      // ===== 軸馬明確レース: 単勝100円 + 馬連100円×2点 = 300円 =====
-      raceType='軸馬明確';
-      // 単勝
-      const tOdds=hasMarket?getActualOdds('単勝',[A]):A.odds;
-      if(tOdds==null||tOdds>=5){
-        tickets.push({type:'単勝',desc:String(A.num),amount:100,horses:[A],
-          actualOdds:hasMarket?tOdds:null,grade:'◎',gradeLabel:'軸馬単勝',
-          reason:A.num+'番が1着で的中'});
-      }
-      // 馬連×2（スコア2位・3位）
-      [B,C].filter(Boolean).forEach(p=>{
-        const uOdds=hasMarket?getActualOdds('馬連',[A,p]):null;
-        if(uOdds!=null&&uOdds<10)return; // オッズ入力時: 10倍未満除外
-        tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],
-          actualOdds:uOdds,grade:'○',gradeLabel:'軸馬絡み',
-          reason:A.num+'番─'+p.num+'番が1・2着で的中'});
-      });
-
-    }else if(isMixedRace){
-      // ===== 混戦レース: ワイド100円×3点（上位3頭の組み合わせ）= 300円 =====
-      raceType='混戦';
-      const trio=[top3[0],top3[1],top3[2]].filter(Boolean);
-      for(let i=0;i<trio.length;i++){
-        for(let j=i+1;j<trio.length;j++){
-          const wOdds=hasMarket?getActualOdds('ワイド',[trio[i],trio[j]]):null;
-          if(wOdds!=null&&wOdds<3)continue; // オッズ入力時: 3倍未満除外
-          tickets.push({type:'ワイド',desc:trio[i].num+'─'+trio[j].num,amount:100,horses:[trio[i],trio[j]],
-            actualOdds:wOdds,grade:'○',gradeLabel:'混戦上位組',
-            reason:trio[i].num+'番─'+trio[j].num+'番が3着以内で的中'});
-        }
-      }
-
-    }else if(isStandard){
-      // ===== 標準レース: 馬連100円×3点（軸馬×上位3頭）= 300円 =====
-      raceType='標準';
-      partners.slice(0,3).forEach(p=>{
-        const uOdds=hasMarket?getActualOdds('馬連',[A,p]):null;
-        if(uOdds!=null&&uOdds<10)return; // オッズ入力時: 10倍未満除外
-        tickets.push({type:'馬連',desc:A.num+'─'+p.num,amount:100,horses:[A,p],
-          actualOdds:uOdds,grade:'○',gradeLabel:'軸馬絡み',
-          reason:A.num+'番─'+p.num+'番が1・2着で的中'});
-      });
-    }
-
-    // オッズフィルタ後に買い目が0点なら見送り
-    if(tickets.length===0)skipRecommended=true;
-  }
-
-  if(!skipRecommended&&!hasMarket){
-    // オッズ未入力時の注記
-    tickets.forEach(tk=>{if(tk.actualOdds==null){tk.grade='-';tk.gradeLabel='※オッズ未入力'}});
-  }
-
-  if(skipRecommended)tickets=[];
-  const totalInv=tickets.reduce((s,t)=>s+t.amount,0);
-
-  // 戦略説明
-  const favNote=favIsOverrated
-    ?'1番人気('+favOdds+'倍)は過剰人気→除外'
-    :'1番人気('+favOdds+'倍)は実力通り';
-  const strategyMap={'軸馬明確':'単勝＋馬連戦略','標準':'馬連戦略','標準(ワイド)':'ワイド戦略','混戦':'ワイド戦略','見送り':'見送り'};
-  const types=[...new Set(tickets.map(t=>t.type))];
-  const patName=skipRecommended?'見送り推奨':types.join('＋')+'×'+tickets.length+'点('+totalInv+'円)';
-  const bonusLabel=A?.statReasons?.length?'【統計補正: '+A.statReasons.join('・')+'】':'';
-  const patReason=skipRecommended
-    ?skipReason
-    :'レース質：'+raceType+' → '+(strategyMap[raceType]||'')+'。軸A='+A.num+'番(ns'+A.ns+'/'+A.pop+'番人気)。'+bonusLabel+'【'+favNote+'】';
-
-  const bestObj={type:types[0]||'',horses:[A,B],est:eU(A,B),ev:A?.ev||0,prob:0,
-    why:[whyPick(A),whyPick(B)],desc:A.num+'─'+B.num,strategy:patName};
-
-  // レース質の警告文
-  const rqWarning=poorRace?'⚠ レース質不良：'+raceQuality.reasons.join('・'):'';
-
-  return{
-    best:bestObj,tickets,patName,patReason,skipRecommended,
-    warning:rqWarning||((!skipRecommended&&!C)?'ワイド候補不足（馬連のみ）':''),
-    isTurf:(raceInfo?.type||'')!=='ダート',
-    fav:favHorse,excluded,confidence,confLevel,
-    raceQuality,favIsOverrated,favIsLegit,
-    fukushoHorse:A,
-    wideAmount:0,fukAmount:0,totalInv,
-    wideHorseB:B,wideHorseC:C,
-    alternatives:[]
-  };
-}
+// ===== 旧ロジック削除済み（V6に統一） =====
 
 // ===== RESULT PARSER (全情報取得版) =====
 function parseResult(text,horses){
@@ -2414,73 +1769,31 @@ function findPayout(payouts,type,nums){
   return found?found.amount:0;
 }
 
-// ===== 全券種的中判定 =====
-function checkAllTickets(r){
-  // 予想の馬番（A=スコア1位, B=スコア2位, C=スコア3位 ※1番人気除外後）
-  const bt=r.bet;
-  let betNums=[];
-  if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
-  else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
-  else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
-  
-  const res=r.result;if(!res?.top3||res.top3.length<3)return null;
-  const t3=res.top3.map(n=>+n); // [1着馬番, 2着馬番, 3着馬番]
-  const pays=res.payouts||{};
-  const A=betNums[0],B=betNums[1];
-  // C = 予想3位の馬（買い目に入っていない次の候補）
-  const scored=r.scored||[];
-  const excl=scored.filter(h=>h.odds&&h.odds<3.0);
-  const elig=scored.filter(h=>!h.odds||h.odds>=3.0);
-  const useElig=elig.length>=2?elig:scored.filter(h=>h!==scored.slice().sort((a,b)=>(a.odds||999)-(b.odds||999))[0]);
-  const C=useElig.find(h=>h.num!==A&&h.num!==B)?.num||0;
-  
-  const results={};
-  // 単勝：Aが1着
-  results['単勝']={hit:t3[0]===A,pay:findPayout(pays,'単勝',[A])||0};
-  // 複勝A
-  results['複勝A']={hit:t3.includes(A),pay:findPayout(pays,'複勝',[A])||0,num:A};
-  // 複勝B
-  results['複勝B']={hit:t3.includes(B),pay:findPayout(pays,'複勝',[B])||0,num:B};
-  // ワイド
-  results['ワイド']={hit:t3.includes(A)&&t3.includes(B),pay:findPayout(pays,'ワイド',[A,B])||0};
-  // 馬連
-  results['馬連']={hit:t3.slice(0,2).includes(A)&&t3.slice(0,2).includes(B),pay:findPayout(pays,'馬連',[A,B])||0};
-  // 馬単 A→B
-  results['馬単']={hit:t3[0]===A&&t3[1]===B,pay:findPayout(pays,'馬単',[A,B])||0};
-  // 3連複
-  results['3連複']={hit:t3.includes(A)&&t3.includes(B)&&t3.includes(C),pay:findPayout(pays,'3連複',[A,B,C])||0,third:C};
-  // 3連単 A→B→C
-  results['3連単']={hit:t3[0]===A&&t3[1]===B&&t3[2]===C,pay:findPayout(pays,'3連単',[A,B,C])||0,third:C};
-  
-  return results;
-}
 
 // ===== 的中判定・回収計算ヘルパー =====
 // 推奨した馬券種のみで的中判定を行う（他券種の偶然の的中は計上しない）
 function getHitInfo(r){
-  const res=r.result,bt=r.bet;
-  if(!res?.top3||res.top3.length<3)return{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0,tickets:null,skip:false,hitTickets:[]};
+  const res=r.result;
+  if(!res?.top3||res.top3.length<3)return{anyHit:false,label:'未入力',ret:0,inv:0,skip:false,hitTickets:[]};
   const v6=r.v6;
-  if(bt?.skipRecommended||bt?.totalInv===0||(v6&&v6.raceType==='SKIP'&&v6.raceType!=='UPSET')){
-    return{wideHit:false,wideTicketHit:false,fukHit:false,anyHit:false,label:'見送り',ret:0,inv:0,tickets:null,skip:true,hitTickets:[]};
+  if(v6&&v6.raceType==='SKIP'){
+    return{anyHit:false,label:'見送り',ret:0,inv:0,skip:true,hitTickets:[]};
   }
-
   const t3=res.top3.map(n=>+n);
   const pays=res.payouts||{};
-  const inv=(r.v6?.bet?.totalCost>0?r.v6.bet.totalCost:bt?.totalInv!=null?bt.totalInv:((bt?.wideAmount||0)+(bt?.fukAmount||0)))||0;
-
-  // === 推奨チケットごとに的中判定 ===
+  const inv=v6?.bet?.totalCost||0;
   let ret=0;
   const hitTickets=[];
 
-  // V6買い目を最優先で判定（画面に表示される推奨馬券がV6）
+  // V6買い目で的中判定
   if(v6?.bet?.bets?.length>0){
     v6.bet.bets.forEach(vb=>{
-      const nums=vb.horses||[];let hit=false;
+      const nums=vb.horses||[];
+      let hit=false;
       switch(vb.kind){
-        case '複勝':hit=nums.length>=1&&t3.includes(nums[0]);break;
-        case '馬連':hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]);break;
-        case 'ワイド':hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]);break;
+        case '複勝': hit=nums.length>=1&&t3.includes(nums[0]); break;
+        case '馬連': hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]); break;
+        case 'ワイド': hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]); break;
       }
       if(hit){
         const sn=[...nums].sort((a,b)=>a-b);
@@ -2491,89 +1804,51 @@ function getHitInfo(r){
       }
     });
   }
-  // V6買い目がない場合のみ旧ロジックにフォールバック
-  else if(bt?.tickets?.length>0){
-    bt.tickets.forEach(tk=>{
+  // V6がない古いデータのみ旧bt.ticketsにフォールバック
+  else if(!v6&&r.bet?.tickets?.length>0){
+    r.bet.tickets.forEach(tk=>{
       const nums=tk.horses?.map(h=>h.num)||[];
       let hit=false;
       switch(tk.type){
         case '単勝': hit=nums.length>=1&&t3[0]===nums[0]; break;
         case '馬連': hit=nums.length>=2&&t3.slice(0,2).includes(nums[0])&&t3.slice(0,2).includes(nums[1]); break;
         case 'ワイド': hit=nums.length>=2&&t3.includes(nums[0])&&t3.includes(nums[1]); break;
-        case '馬単': hit=nums.length>=2&&t3[0]===nums[0]&&t3[1]===nums[1]; break;
-        case '枠連': {const wk=tk.horses?.map(h=>h.waku)||[];hit=wk.length>=2&&t3.slice(0,2).some(n=>{const h=r.scored?.find(x=>x.num===n);return h&&h.waku===wk[0]})&&t3.slice(0,2).some(n=>{const h=r.scored?.find(x=>x.num===n);return h&&h.waku===wk[1]});} break;
-        case '3連複': hit=nums.length>=3&&t3.includes(nums[0])&&t3.includes(nums[1])&&t3.includes(nums[2]); break;
-        case '3連単': hit=nums.length>=3&&t3[0]===nums[0]&&t3[1]===nums[1]&&t3[2]===nums[2]; break;
       }
       if(hit){
-        const sortedNums=tk.type==='馬単'||tk.type==='3連単'?nums:[...nums].sort((a,b)=>a-b);
-        let pay=findPayout(pays,tk.type,sortedNums)||0;
-        if(pay===0){
-          const allTk=checkAllTickets(r);
-          if(allTk){
-            const tkKey=tk.type;
-            if(tkKey&&allTk[tkKey]?.hit&&allTk[tkKey]?.pay>0)pay=allTk[tkKey].pay;
-          }
-          if(pay===0&&res.payout>0)pay=res.payout;
-        }
-        ret+=pay*(tk.amount/100);
-        hitTickets.push({type:tk.type,desc:tk.desc,pay,amount:tk.amount});
+        const sn=[...nums].sort((a,b)=>a-b);
+        let pay=findPayout(pays,tk.type,sn)||0;
+        if(pay===0&&res.payout>0)pay=res.payout;
+        ret+=pay*((tk.amount||100)/100);
+        hitTickets.push({type:tk.type,desc:tk.desc,pay,amount:tk.amount||100});
       }
     });
-  }
-  // v13以前（tickets配列もv6もない場合）
-  else{
-    let betNums=[];
-    if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
-    else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
-    else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
-    const wAmt=bt?.wideAmount||0;const fAmt=bt?.fukAmount||0;const fukNum=bt?.fukushoHorse?.num;
-    const wHit=betNums.length>=2&&t3.slice(0,2).includes(betNums[0])&&t3.slice(0,2).includes(betNums[1]);
-    if(wHit){const p=findPayout(pays,'ワイド',betNums)||res.payout||0;ret+=p*((wAmt||300)/100);hitTickets.push({type:'馬連',desc:betNums.join('─'),pay:p});}
-    const fHit=!!(fukNum&&fAmt>0&&t3.includes(fukNum));
-    if(fHit){const p=findPayout(pays,'複勝',[fukNum])||0;if(p>0)ret+=p*(fAmt/100);hitTickets.push({type:'複勝',desc:String(fukNum),pay:p});}
   }
 
   const anyHit=hitTickets.length>0;
   const label=anyHit?hitTickets.map(h=>h.type+'的中').join('・'):'不的中';
-  // 互換用フラグ
-  const wideHit=hitTickets.some(h=>h.type==='馬連');
-  const wideTicketHit=hitTickets.some(h=>h.type==='ワイド');
-  const fukHit=hitTickets.some(h=>h.type==='複勝');
-
-  return{wideHit,wideTicketHit,fukHit,anyHit,label,ret:Math.round(ret),inv,skip:false,hitTickets};
+  return{anyHit,label,ret:Math.round(ret),inv,skip:false,hitTickets};
 }
 
 // ===== LOSS ANALYSIS =====
 function analyzeLoss(rd,top3){
   if(!top3||top3.length<3)return[];
-  const bt=rd.bet;
   let betNums=[];
-  // V6買い目を優先（画面に表示される「統合推奨馬券」がV6）
+  // V6買い目のみ
   if(rd.v6?.bet?.bets?.length>0){
     const v6Nums=new Set();
     rd.v6.bet.bets.forEach(vb=>(vb.horses||[]).forEach(n=>v6Nums.add(n)));
     betNums=[...v6Nums];
   }
-  // V6がなければチケットベースの買い目
-  if(betNums.length<2&&bt?.tickets?.length>0){
-    const tkNums=new Set();
-    bt.tickets.forEach(tk=>(tk.horses||[]).forEach(h=>tkNums.add(h.num)));
-    if(tkNums.size>=1)betNums=[...tkNums];
-  }
-  // それでもなければ従来のbest.horses
-  if(betNums.length<2){
-    if(bt?.best?.horses)betNums=bt.best.horses.map(h=>h.num);
-    else if(bt?.bets?.length>0)betNums=[bt.bets[0].a.num,bt.bets[0].b.num];
-    else if(bt?.bet)betNums=[bt.bet.a.num,bt.bet.b.num];
+  // V6がない古いデータ
+  else if(!rd.v6&&rd.bet?.best?.horses){
+    betNums=rd.bet.best.horses.map(h=>h.num);
   }
   if(betNums.length<1)return['買い目なし'];
-  
+
   const t3=top3.map(n=>+n);
   const sc=rd.scored;const fH=n=>sc.find(h=>h.num===n);
   const inTop3=betNums.filter(n=>t3.includes(n));
-  const fukNum=bt?.fukushoHorse?.num;
-  const fukHit=fukNum&&t3.includes(fukNum);
+  const fukHit=false;
   
   // 買い目の2頭が両方3着以内 → 外れた原因の分析は不要
   if(inTop3.length>=2)return[];
@@ -3207,14 +2482,13 @@ function doAnalyze(){
   }
   const errDiv2=document.getElementById('analyzeError');if(errDiv2)errDiv2.classList.add('hidden');
   const scored=score(parsed);
-  const bet=genBet(scored,parsed.info);
   const v6data=computeV6(scored,parsed.info);
   const id=Date.now().toString();
   const venue=pVenue;
   const label=(pDate||'?')+' '+venue+' '+(pNum||'?')+'R '+(parsed.info.dist||'')+'m '+(parsed.info.surf||'');
   const sk=pDate?pDate.split('/').map((v,i)=>i===0?v:v.padStart(2,'0')).join(''):'99999999';
   const sortKey=sk+String(pNum||0).padStart(2,'0');
-  const race={id,label,sortKey,info:parsed.info,scored,bet,v6:v6data,result:null,_scoreVer:'v6.0.0'};
+  const race={id,label,sortKey,info:parsed.info,scored,bet:null,v6:v6data,result:null,_scoreVer:'v6.0.0'};
   RACES.unshift(race);saveR(RACES);
   autoSaveAll();
   document.getElementById('raceIn').value='';
@@ -3258,9 +2532,9 @@ function renderList(){
   // 軸馬的中率（A馬が3着以内に入った率）
   let axisIn3=0,axisTotal=0;
   done.forEach(r=>{
-    if(!r.bet?.best?.horses?.[0]||!r.result?.top3)return;
+    if(!r.v6?.picks?.axis||!r.result?.top3)return;
     axisTotal++;
-    const anum=r.bet.best.horses[0].num;
+    const anum=r.v6.picks.axis;
     if(r.result.top3.map(Number).includes(anum))axisIn3++;
   });
 
@@ -3340,7 +2614,8 @@ function renderList(){
       const hi=getHitInfo(r);
       const isSkip=hi.skip;
       const cls=hasR?(isSkip?'pend':hi.anyHit?'hit':'miss'):'pend';
-      const betInfo=(!isSkip&&r.v6?.bet?.bets?.length>0)?r.v6.bet.bets.map(b=>b.kind+' '+b.desc).join(' ／ '):(!isSkip&&r.bet?.best)?r.bet.best.type+' '+r.bet.best.desc:'';
+      const betInfo=(!isSkip&&r.v6?.bet?.bets?.length>0)?r.v6.bet.bets.map(b=>b.kind+' '+b.desc).join(' ／ '):'';
+
       const inv=hi.inv||0;
       let profitStr='';
       if(hasR&&!isSkip){const p=hi.ret-inv;profitStr=p>=0?`+${Math.round(p).toLocaleString()}円`:`${Math.round(p).toLocaleString()}円`}
@@ -3391,9 +2666,8 @@ function recalcAll(){
     })),info:r.info};
     try{
       const newScored=score(race);
-      const newBet=genBet(newScored,r.info,r._marketOdds);
       r.scored=newScored;
-      r.bet=newBet;
+      r.bet=null;
       r.v6=computeV6(newScored,r.info);
       if(r.result?.top3?.length>=3){
         const reasons=analyzeLoss(r,r.result.top3);
@@ -3469,7 +2743,7 @@ function downloadAllCSV(){
         actualRank,top3.length>=3?inTop3:'',
         h.odds||ar?.popularity?'':'',ar?.popularity||h._resultPopularity||'',
         resLast3f,resPos,
-        h.statNs!=null?h.statNs:'',h.statRate!=null?h.statRate.toFixed(1):'',h.isBlindSpot?'盲点':''
+        h.v6sf!=null?h.v6sf:'','',''
       ]);
     });
   });
@@ -3495,9 +2769,9 @@ function downloadCSV(){
     const hasR=r.result?.top3?.length>=3;
     const hi=hasR?getHitInfo(r):{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0};
     const venue=(r.info.course||'').replace(/\d+回/,'').replace(/\d+日/,'');
-    const betType=r.bet?.best?.type||'';
-    const betNums=r.bet?.best?.desc||'';
-    const betNames=r.bet?.best?.horses?.map(h=>h.name).join('×')||'';
+    const betType=r.v6?.bet?.bets?.[0]?.kind||'';
+    const betNums=r.v6?.bet?.bets?.map(b=>b.desc).join('/')||'';
+    const betNames='';
     const payout=r.result?.payout||0;
     const ret=hi.ret;
     const inv=hi.inv||0;
@@ -3976,21 +3250,13 @@ function calcTrRateForDetail(trName){
 function renderDetail(id){
   try{
   const r=RACES.find(x=>x.id===id);if(!r)return;
-  const s=r.scored;let b=r.bet;const hasR=r.result?.top3?.length>=3;
-  // bet が未定義または不正な場合は genBet を再実行して修復
-  if((!b||b.totalInv===undefined)&&s?.length>0){
-    try{b=genBet(s,r.info);r.bet=b}catch(e){console.warn('bet再生成失敗:',e.message)}
+  const s=r.scored;const hasR=r.result?.top3?.length>=3;
+  // V6がない場合は再生成
+  if(!r.v6&&s?.length>0){
+    try{r.v6=computeV6(s,r.info)}catch(e){console.warn('V6再生成失敗:',e.message)}
   }
-  const hi=hasR?getHitInfo(r):{wideHit:false,fukHit:false,anyHit:false,label:'未入力',ret:0,inv:0};
-  const isHit=hi.wideHit;
-  // 旧データ互換：bets配列→best単体に変換
-  if(b&&!b.best&&b.bets?.length>0){
-    const ob=b.bets[0];b={...b,best:{type:'ワイド',horses:[ob.a,ob.b],est:ob.est||0,ev:0,prob:0,why:[ob.whyA||[],ob.whyB||[]],desc:ob.a.num+'─'+ob.b.num},warning:b.warning||'',typeReason:'（旧データ）'};
-  }
-  if(b&&!b.best&&b.bet){
-    const ob=b.bet;b={...b,best:{type:'ワイド',horses:[ob.a,ob.b],est:ob.est||0,ev:0,prob:0,why:[ob.whyA||[],ob.whyB||[]],desc:ob.a.num+'─'+ob.b.num},warning:'',typeReason:'（旧データ）'};
-  }
-  if(!b)b={best:null,warning:'データなし'};
+  const hi=hasR?getHitInfo(r):{anyHit:false,label:'未入力',ret:0,inv:0};
+  const isHit=hi.anyHit;
   const isPast=isPastOnly(r);
   let h=`<button class="btn-s" onclick="showView('list')" style="margin-bottom:8px">← 一覧</button>`;
   // Header
@@ -4307,13 +3573,13 @@ function buildAnalysisSnapshot(r){
         num:h.num,name:h.name,odds:h.odds,pop:h.pop,ns:h.ns,score:h.score,
         factors:Object.fromEntries(Object.entries(h.f||{}).map(([k,v])=>[k,{v:v.v,c:v.c}])),
         actualRank,inTop3:top3.includes(h.num),
-        isA:r.bet?.best?.horses?.[0]?.num===h.num,
-        isB:r.bet?.best?.horses?.[1]?.num===h.num,
-        isC:r.bet?.wideHorseC?.num===h.num
+        isA:r.v6?.picks?.axis===h.num,
+        isB:r.v6?.picks?.partner===h.num,
+        isC:false
       };
     }),
     betResult:{
-      type:r.bet?.best?.type,desc:r.bet?.best?.desc,
+      type:r.v6?.bet?.bets?.[0]?.kind||'',desc:r.v6?.bet?.bets?.map(b=>b.desc).join('/')||'',
       wideDesc:r.bet?.wideHorseB&&r.bet?.wideHorseC?r.bet.wideHorseB.num+'─'+r.bet.wideHorseC.num:null,
       totalInv:r.bet?.totalInv||0,confidence:r.bet?.confidence,confLevel:r.bet?.confLevel,
       raceQualityScore:r.bet?.raceQuality?.score,skipRecommended:r.bet?.skipRecommended
@@ -5438,7 +4704,7 @@ async function doGhLoad(){
       })),info:r.info};
       const oldTop=r.scored[0]?.ns||0;
       r.scored=score(race);
-      r.bet=genBet(r.scored,r.info,r._marketOdds);
+      r.bet=null;
       r.v6=computeV6(r.scored,r.info);
       r._scoreVer=SCORE_VER;
       const newTop=r.scored[0]?.ns||0;
