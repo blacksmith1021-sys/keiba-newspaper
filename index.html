@@ -949,7 +949,14 @@ function assignMarksV6(horses,ri){
 }
 function buildV6Bet(type,picks,ri,horses){
   const bets=[];
-  if(type==='SKIP')return{bets:[],totalCost:0,raceType:type,reason:'購入条件を満たす馬なし'};
+  if(type==='SKIP'){
+    const sorted=[...(horses||[])].sort((a,b)=>(b.adjNs||b.ns||0)-(a.adjNs||a.ns||0));
+    const t1pop=sorted[0]?.pop||99;
+    let reason='購入条件を満たす馬なし';
+    if(t1pop===1)reason='最高スコア馬が1番人気（複勝オッズ低すぎ・ROI非効率）';
+    else if(t1pop<=3&&sorted[1]&&(sorted[1].pop||99)<=3)reason='上位2頭が共に1-3人気（ワイドオッズ低すぎ）';
+    return{bets:[],totalCost:0,raceType:type,reason};
+  }
 
   if(type==='ANA'){
     // 穴馬複勝: 補正80+ × 7-10人気の最高スコア馬に複勝100円
@@ -3895,7 +3902,7 @@ function renderDetail(id){
       h+=`<div class="pnl" style="border:2px solid var(--dim)">`;
       h+=`<h3 style="color:var(--dim)">📊 統合推奨馬券</h3>`;
       h+=`<div style="font-size:16px;font-weight:900;color:var(--dim);margin-bottom:6px">⏭ このレースは見送り</div>`;
-      h+=`<div style="font-size:12px;color:var(--dim)">${v6r||'堅い条件なし / 穴パターン馬なし'}</div>`;
+      h+=`<div style="font-size:12px;color:var(--dim)">${v6r||'購入条件を満たす馬なし'}</div>`;
       h+=`</div>`;
     }
 
@@ -3957,7 +3964,7 @@ function renderDetail(id){
     h+=`<div style="font-size:10px;color:var(--lt);margin-top:6px">v6: 6因子(-24〜+34) / 前走S(0〜58) / パターン(巻き返し/実績降格/隠れ末脚) / 分類(堅い/穴/見送り)</div>`;
     h+=`</div>`;
     h+=`<div style="font-size:11px;color:var(--dim);padding:6px 12px;background:var(--p2);border-radius:4px;margin-bottom:8px">
-      <b>投資ルール:</b> 穴=複勝100円(+ワイド100円) / W=ワイド100円 / 鉄=複勝100円 / 見送り=0円 / 1日損失上限-5,000円
+      <b>投資ルール:</b> 穴=複勝100円(+ワイド100円) / W=ワイド100円 / 鉄=複勝100円 / 低配当=見送り / 1日損失上限-5,000円
     </div>`;
   }
 
@@ -4415,7 +4422,7 @@ function renderReview(){
     h+=`<div style="font-size:13px;margin-bottom:8px">投資 ${di.toLocaleString()}円 / 回収 ${dr.toLocaleString()}円 / <b style="color:${dp>=0?'var(--grn)':'var(--red)'}">損益 ${dp>=0?'+':''}${dp.toLocaleString()}円</b> / 回収率 ${di>0?(dr/di*100).toFixed(1):'0'}% / 的中 ${dh}/${rs.length}</div>`;
     rs.forEach(rv=>{
       const isHit=rv.判定==='的中';
-      const cls=rv.分類==='SOLID'?'堅い':rv.分類==='UPSET'?'穴':rv.分類==='SKIP'?'見送り':rv.分類;
+      const cls=rv.分類==='ANA'?'穴':rv.分類==='WIDE'?'W':rv.分類==='SOLID'?'鉄':rv.分類==='UPSET'?'穴':rv.分類==='SKIP'?'見送り':rv.分類;
       const memo=memos[rv.id]||'';
       h+=`<div style="border-left:3px solid ${isHit?'var(--grn)':'var(--red)'};padding:8px 10px;margin:6px 0;background:var(--p2);border-radius:0 4px 4px 0">
         <div style="font-size:13px;font-weight:700">${rv.競馬場} ${rv.レース番号}R [${cls}] ${isHit?'✅':'❌'}
@@ -4439,18 +4446,18 @@ function renderTrends(){
   // === v6 STEP 10: レース分類別 ROI 比較 ===
   const reviews6=(typeof buildAllReviews==='function')?buildAllReviews():[];
   if(reviews6.length>0){
-    const byType={SOLID:{i:0,r:0,n:0,h:0},UPSET:{i:0,r:0,n:0,h:0},SKIP:{i:0,r:0,n:0,h:0}};
+    const byType={ANA:{i:0,r:0,n:0,h:0},WIDE:{i:0,r:0,n:0,h:0},SOLID:{i:0,r:0,n:0,h:0},UPSET:{i:0,r:0,n:0,h:0},SKIP:{i:0,r:0,n:0,h:0}};
     reviews6.forEach(rv=>{const b=byType[rv.分類];if(!b)return;b.i+=rv.投資額;b.r+=rv.回収額;b.n++;if(rv.判定==='的中')b.h++});
     const tot={i:reviews6.reduce((s,r)=>s+r.投資額,0),r:reviews6.reduce((s,r)=>s+r.回収額,0)};
     h+=`<div class="pnl" style="border:2px solid var(--blu)"><h3 class="b">📊 レース分類別 ROI（v6）</h3>
     <table style="width:100%;font-size:13px;border-collapse:collapse">
     <tr style="background:var(--ink);color:var(--p)"><th style="padding:6px">分類</th><th style="padding:6px">R数</th><th style="padding:6px">投資</th><th style="padding:6px">回収</th><th style="padding:6px">損益</th><th style="padding:6px">回収率</th><th style="padding:6px">的中率</th></tr>`;
-    [['SOLID','堅い','var(--blu)'],['UPSET','穴','var(--gld)'],['SKIP','見送り','var(--dim)']].forEach(([k,lbl,col])=>{
+    [['ANA','穴','var(--gld)'],['WIDE','W','var(--grn)'],['SOLID','鉄','var(--blu)'],['UPSET','穴(旧)','var(--gld)'],['SKIP','見送り','var(--dim)']].forEach(([k,lbl,col])=>{
       const b=byType[k];const roi=b.i>0?(b.r/b.i*100).toFixed(1):'-';const hr=b.n>0?(b.h/b.n*100).toFixed(0):'-';const pnl=b.r-b.i;
       h+=`<tr><td style="padding:5px;text-align:center;font-weight:900;color:${col}">${lbl}</td><td style="padding:5px;text-align:center">${b.n}</td><td style="padding:5px;text-align:right">${b.i.toLocaleString()}</td><td style="padding:5px;text-align:right">${b.r.toLocaleString()}</td><td style="padding:5px;text-align:right;color:${pnl>=0?'var(--grn)':'var(--red)'};font-weight:700">${pnl>=0?'+':''}${pnl.toLocaleString()}</td><td style="padding:5px;text-align:right;font-weight:700;color:${b.i>0&&b.r/b.i>=1?'var(--grn)':'var(--red)'}">${roi}%</td><td style="padding:5px;text-align:right">${hr}%</td></tr>`;
     });
     h+=`</table>
-    <div style="font-size:11px;color:var(--dim);margin-top:6px">SOLIDは堅実な小額投資、UPSETは高配当狙い。両者の回収率を比較してバランスを評価。</div>
+    <div style="font-size:11px;color:var(--dim);margin-top:6px">穴=穴馬複勝(ROI最高) / W=中配当ワイド / 鉄=鉄板複勝 / 穴(旧)=旧UPSET互換。低配当は見送り。</div>
     </div>`;
   }
 
