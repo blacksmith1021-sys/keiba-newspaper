@@ -912,12 +912,13 @@ function classifyRaceV6(horses,ri){
   const t1pop=top1?.pop||top1?._resultPopularity||99;
   const t2pop=top2?.pop||top2?._resultPopularity||99;
 
-  // TYPE1: 穴馬あり → ANA（穴馬複勝が最高ROI）
+  // TYPE1: 穴馬あり → ANA
   if(anaPool.length>0)return'ANA';
-  // TYPE2: 上位2頭が共に1-6人気 → WIDE（ワイドが高ROI）
-  if(t1pop<=6&&t2pop<=6)return'WIDE';
-  // TYPE3: 1位が1-3人気 → SOLID（鉄板複勝）
-  if(t1pop<=3)return'SOLID';
+  // TYPE2: 上位2頭が共に1-6人気 かつ 少なくとも1頭が4人気以降
+  // （共に1-3人気だとワイドオッズが低すぎる）
+  if(t1pop<=6&&t2pop<=6&&(t1pop>=4||t2pop>=4))return'WIDE';
+  // TYPE3: 1位が2-3人気 → SOLID（1番人気は複勝オッズが低すぎるため除外）
+  if(t1pop>=2&&t1pop<=3)return'SOLID';
   // TYPE4: どれにも該当しない → SKIP
   return'SKIP';
 }
@@ -956,26 +957,34 @@ function buildV6Bet(type,picks,ri,horses){
     const ana=picks.ana;
     if(!ana)return{bets:[],totalCost:0,raceType:type,reason:'穴馬候補消失'};
     bets.push({kind:'複勝',horses:[ana.num],cost:100,desc:String(ana.num)});
-    // 軸馬が1-6人気ならワイドも追加（ROI 189%ゾーン）
+    // 軸馬が4-6人気ならワイドも追加（中配当ゾーン）
+    // 軸馬が1-3人気だとワイドオッズが低すぎるため追加しない
     const ax=picks.axis;
-    if(ax&&(ax.pop||99)<=6){
+    if(ax&&(ax.pop||99)>=4&&(ax.pop||99)<=6){
       bets.push({kind:'ワイド',horses:[ax.num,ana.num],cost:100,desc:ax.num+'—'+ana.num});
     }
     return{bets,totalCost:bets.reduce((s,b)=>s+b.cost,0),raceType:type};
   }
 
   if(type==='WIDE'){
-    // ワイド: スコア1位×2位（共に1-6人気）にワイド100円
     const ax=picks.axis,pr=picks.partner;
     if(!ax||!pr)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
+    // 低配当フィルタ: 共に1-3人気のワイドは配当が低すぎる（概算3-5倍）
+    const axPop=ax.pop||99,prPop=pr.pop||99;
+    if(axPop<=3&&prPop<=3){
+      return{bets:[],totalCost:0,raceType:'SKIP',reason:'ワイドオッズ低すぎ('+axPop+'人気×'+prPop+'人気)'};
+    }
     bets.push({kind:'ワイド',horses:[ax.num,pr.num],cost:100,desc:ax.num+'—'+pr.num});
     return{bets,totalCost:100,raceType:type};
   }
 
   if(type==='SOLID'){
-    // 鉄板複勝: スコア1位（1-3人気）に複勝100円
     const ax=picks.axis;
     if(!ax)return{bets:[],totalCost:0,raceType:type,reason:'候補馬不足'};
+    // 1番人気の複勝はオッズ1.1-1.3倍で利益が出ない
+    if((ax.pop||99)===1){
+      return{bets:[],totalCost:0,raceType:'SKIP',reason:'1番人気の複勝は低配当(ROI非効率)'};
+    }
     bets.push({kind:'複勝',horses:[ax.num],cost:100,desc:String(ax.num)});
     return{bets,totalCost:100,raceType:type};
   }
