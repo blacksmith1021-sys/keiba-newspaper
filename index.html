@@ -848,44 +848,19 @@ return r}
 const V6_TOP9=['C.ルメール','川田 将雅','戸崎 圭太','岩田 望来','R.キング','西村 淳也','坂井 瑠星','武 豊','松山 弘平'];
 function calcSixFactorV6(h,ri){
   let s=0;const d=[];
-  const jk=(h.jk||'').replace(/[\s　]+/g,' ').trim();
-  if(V6_TOP9.some(j=>j.replace(/[\s　]+/g,' ')===jk)){s+=15;d.push('騎手+15')}
+  // 騎手はJOCKEY_RISKに統合（二重カウント防止）
   const wt=h.wt||0;
   if(wt>=520){s+=8;d.push('520kg+8')}else if(wt>=480){s+=5;d.push('480kg+5')}
   else if(wt>=460)s+=2;else if(wt>0&&wt<440){s-=8;d.push('<440kg-8')}
   const imp=h.imp||0;
   if(imp>=57){s+=5;d.push('斤量57+5')}else if(imp>0&&imp<54){s-=8;d.push('斤量<54-8')}
-  // --- トラックバイアス補正（枠順 × 馬場バイアス） ---
-  const course=ri?.type||'',dist=ri?.dist||0,gate=h.num||0;
-  if(course==='芝'&&gate>0){
-    const runners=16; // 6因子計算時はhs未確定のためデフォルト
-    const isInnerGate=gate<=Math.ceil(runners*0.25);
-    const isOuterGate=gate>=Math.ceil(runners*0.75);
-    // 開催日数から内外バイアスを推定
-    const km=(ri?.course||'').match(/(\d+)日/);
-    const kd=km?parseInt(km[1]):4;
-    const cv=ri?.cond||'良';
-    let bi=0;
-    if(kd<=2)bi=2;else if(kd>=6)bi=-2;
-    if(cv==='重'||cv==='不良')bi-=1;
-
-    if(bi>=2){
-      if(isInnerGate){s+=6;d.push('内枠×内有利+6')}
-      else if(isOuterGate){s-=4;d.push('外枠×内有利-4')}
-    }else if(bi<=-2){
-      if(isOuterGate){s+=4;d.push('外枠×外有利+4')}
-      else if(isInnerGate){s-=3;d.push('内枠×外有利-3')}
-    }else{
-      if(dist>=1500){
-        if(isInnerGate){s+=2;d.push('内枠+2')}
-        else if(isOuterGate){s-=2;d.push('外枠-2')}
-      }
-    }
-  }else if(course==='ダート'&&gate>0){
-    if(dist>=1500&&gate<=3){s+=2;d.push('ダ内枠+2')}
-  }
+  // 枠順はscore関数内のトラックバイアス補正に統合（二重カウント防止）
+  // 性別補正: 牝馬限定戦では補正なし、混合戦のみ適用
   const sex=h.sex||'';
-  if(sex==='牡'){s+=3;d.push('牡+3')}else if(sex==='牝'){s-=3;d.push('牝-3')}
+  const isFemaleOnly=(ri?.cls||'').includes('牝');
+  if(!isFemaleOnly){
+    if(sex==='牡'){s+=2;d.push('牡+2')}else if(sex==='牝'){s-=2;d.push('牝-2')}
+  }
   const wc=h.wc;
   if(wc!=null){if(Math.abs(wc)<=3){s+=3;d.push('安定+3')}else if(Math.abs(wc)>=10){s-=5;d.push('変動-5')}}
   return{score:s,detail:d};
@@ -1186,7 +1161,7 @@ const paceAdvantage=paceType==='H超'||paceType==='H'?'差し追込':'先行';
 // Phase2: 51レース706頭の実データ検証に基づく重み（g-b差＝予測力）
 // 前走+37,着差+37→最有力 / 蓄積+34,安定+32→有力 / 上がり+25,距離+25→有力
 // 回り+16→やや有効 / 血統+10→弱い / 間隔+1→無効
-const FW={'前走':2.0,'着差':2.0,'蓄積':1.8,'安定':1.7,'stability':1.5,'上がり':1.5,'距離':1.5,'騎手':1.3,'回り':0.8,'血統':0.3,'間隔':0};
+const FW={'前走':2.0,'着差':2.0,'蓄積':1.8,'安定':1.7,'stability':1.5,'上がり':1.5,'距離':1.5,'タイム':1.5,'騎手':1.3,'回り':0.8,'血統':0.3,'間隔':0};
 const fw=(k,pts)=>Math.round(pts*(FW[k]!=null?FW[k]:1)); // 重み付き加点
 
 // 競馬場名取得
@@ -1198,8 +1173,16 @@ const mr=h._matchRace;
 
 // ===【能力】===
 
-// 前走着順
-if(l){const r=l.fin/l.run;if(r<=.2){s+=fw('前走',18);f['前走']={v:l.fin+'着/'+l.run+'頭',c:'g'}}else if(r<=.4){s+=fw('前走',12);f['前走']={v:l.fin+'着/'+l.run+'頭',c:'g'}}else if(r<=.6){s+=5;f['前走']={v:l.fin+'着/'+l.run+'頭',c:'n'}}else{s-=5;f['前走']={v:l.fin+'着/'+l.run+'頭',c:'b'}}}
+// 前走着順（着順絶対値＋頭数補正）
+if(l){
+  const fin=l.fin;const run=l.run||16;
+  let pts=fin===1?20:fin===2?16:fin===3?12:fin<=5?6:fin<=8?2:-4;
+  if(run>=14&&fin<=3)pts+=4;
+  if(run>=14&&fin<=5)pts+=2;
+  if(run<=8&&fin<=3)pts-=2;
+  s+=fw('前走',pts);
+  f['前走']={v:fin+'着/'+run+'頭',c:pts>=10?'g':pts>=0?'n':'b'};
+}
 
 // 前走着差
 if(l?.gap!=null){
@@ -1225,6 +1208,44 @@ if(mr?.f3&&f3list.length>=3){
   if(diff<=-1.0){s+=fw('上がり',8);f['上がり']={v:mr.f3+'s(速)',c:'g'}}
   else if(diff<=0.5){s+=3;f['上がり']={v:mr.f3+'s',c:'n'}}
   else{s-=2;f['上がり']={v:mr.f3+'s(遅)',c:'b'}}
+}
+
+// 走破タイム評価（前走タイムの距離補正後の相対評価）
+if(l?.time && l?.dist){
+  const timeParts = l.time.match(/(\d+):(\d{2})\.(\d)/);
+  if(timeParts){
+    const totalSec = parseInt(timeParts[1])*60 + parseInt(timeParts[2]) + parseInt(timeParts[3])*0.1;
+    const baseTimes = {
+      '芝': {1000:56.5, 1200:69.0, 1400:82.0, 1600:94.5, 1800:107.5, 2000:120.0, 2200:133.0, 2400:145.0, 2500:151.0},
+      'ダ': {1000:59.0, 1150:68.5, 1200:72.0, 1400:84.5, 1700:104.0, 1800:110.5, 1900:116.0, 2000:122.0, 2100:128.0, 2400:149.0}
+    };
+    const surfKey = l.surface === 'ダ' ? 'ダ' : '芝';
+    const bases = baseTimes[surfKey];
+    if(bases){
+      const dists = Object.keys(bases).map(Number).sort((a,b)=>a-b);
+      let baseTime;
+      if(l.dist <= dists[0]) baseTime = bases[dists[0]];
+      else if(l.dist >= dists[dists.length-1]) baseTime = bases[dists[dists.length-1]];
+      else {
+        for(let i=0; i<dists.length-1; i++){
+          if(l.dist >= dists[i] && l.dist <= dists[i+1]){
+            const ratio = (l.dist - dists[i]) / (dists[i+1] - dists[i]);
+            baseTime = bases[dists[i]] + ratio * (bases[dists[i+1]] - bases[dists[i]]);
+            break;
+          }
+        }
+      }
+      if(baseTime){
+        const condAdj = {'良':0,'稍重':0.5,'重':2.0,'不良':4.0}[l.cond] || 0;
+        const adjBase = baseTime + condAdj;
+        const diff = totalSec - adjBase;
+        if(diff <= -2.0){s += fw('タイム',8); f['タイム']={v:'好時計(基準-'+Math.abs(diff).toFixed(1)+'秒)',c:'g'}}
+        else if(diff <= -0.5){s += fw('タイム',4); f['タイム']={v:'やや好時計',c:'g'}}
+        else if(diff <= 1.5){f['タイム']={v:'標準',c:'n'}}
+        else{s -= 4; f['タイム']={v:'遅め(基準+'+diff.toFixed(1)+'秒)',c:'b'}}
+      }
+    }
+  }
 }
 
 // 過去走トレンド（最大4走の推移を評価）
@@ -1411,9 +1432,8 @@ if(R3_UPSET[r3key]){
 const R3_SOLID={'中山1600':4,'中山1800':5,'阪神1400':4,'京都1800':3};
 if(R3_SOLID[r3key]&&h.pop===1){s+=R3_SOLID[r3key];f['堅い条件']={v:r3key+'(1番人気堅い)',c:'g'}}
 
-// RULE 4: 騎手×競馬場/距離/コースの相性
-const jkName=(h.jk||'').replace(/[\s　]+/g,'');
-if(jkName&&raceVenue){
+// RULE 4: 騎手評価はJOCKEY_RISKテーブルに統合（二重カウント解消）
+if(false){
   // 騎手×競馬場
   const JK_VENUE={
     'C.ルメール':{'京都':8,'東京':5},
@@ -1490,25 +1510,7 @@ if(h.prev?.length>0){
   }
 }
 
-// RULE 6: 馬番の内外有利
-if(h.num&&hs.length>=8){
-  const totalHorses=hs.length;
-  const isInner=h.num<=Math.ceil(totalHorses/3);
-  const isOuter=h.num>=Math.ceil(totalHorses*2/3);
-  if(!isDirt){
-    // 芝: 内枠有利
-    const TURF_INNER={'東京':5,'阪神':4,'中京':3,'中山':2};
-    const tip=TURF_INNER[raceVenue]||0;
-    if(isInner&&tip){s+=tip;f['枠順']={v:'内枠('+h.num+'番)×'+raceVenue+'芝',c:'g'}}
-    else if(isOuter&&tip>=3){s-=Math.round(tip*0.5);f['枠順']={v:'外枠('+h.num+'番)×'+raceVenue+'芝',c:'b'}}
-  }else{
-    // ダート: 外枠有利
-    const DIRT_OUTER={'中山':4,'京都':3,'中京':3};
-    const dop=DIRT_OUTER[raceVenue]||0;
-    if(isOuter&&dop){s+=dop;f['枠順']={v:'外枠('+h.num+'番)×'+raceVenue+'ダート',c:'g'}}
-    else if(isInner&&dop>=3){s-=Math.round(dop*0.5);f['枠順']={v:'内枠('+h.num+'番)×'+raceVenue+'ダート',c:'b'}}
-  }
-}
+// RULE 6: 枠順はトラックバイアス補正に統合（二重カウント解消）
 
 // RULE 8: 性齢補正
 if(h.sex&&h.age){
@@ -1517,13 +1519,11 @@ if(h.sex&&h.age){
   if(h.sex==='牝'&&h.age>=6)s-=2;        // 高齢牝馬はさらに減点
 }
 
-// RULE 9: 馬場状態の影響
-if(isSlight&&h.pop===2)s+=2;              // 稍重で2番人気の信頼度上昇
-if(isHeavy&&h.pop===3)s+=3;              // 重馬場で3番人気の信頼度上昇
-if(isHeavy&&h.pop===4)s-=2;             // 重馬場で4番人気の信頼度低下
+// RULE 9: 削除（人気ハードコードは因果関係なし。馬場適性は馬場一致ファクターで評価）
 
 h.score=Math.max(0,s);h.f=f});
 // 正規化は最高得点を100として相対値
+// 正規化（参考値として残す）+ 素点ベースの判定用
 const mx=Math.max(...hs.map(h=>h.score),1);hs.forEach(h=>{h.ns=Math.round((h.score/mx)*100);h.ev=h.odds?Math.round((h.ns/100)*h.odds*100-100)/100:0});
 
 // ===== v2.9: 予測精度向上補正（11,446出走データに基づく） =====
@@ -1572,7 +1572,7 @@ hs.forEach(h=>{
     if(Math.abs(COURSE_DIST_BIAS[cdKey])>=2)adjDetail.push(cdKey+(COURSE_DIST_BIAS[cdKey]>0?'有利':'不利'));
   }
   h.adjScore=h.score+adj;
-  h.adjNs=Math.max(0,Math.min(100,Math.round((h.adjScore/mx)*100)));
+  h.adjNs=h.adjScore; // 素点ベース（正規化しない）
   h.adjDetail=adjDetail;
   h.adjDelta=adj;
 });
