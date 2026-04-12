@@ -938,12 +938,18 @@ function classifyRaceV6(horses,ri){
   const top2=sorted[1];
   const t1pop=top1?.pop||top1?._resultPopularity||99;
   const t2pop=top2?.pop||top2?._resultPopularity||99;
+  // オッズ未取得の場合は人気から推定
+  const estOdds=(pop)=>pop<=2?3:pop===3?5:pop===4?8:pop===5?12:pop===6?18:30;
+  const t1odds=top1?.odds||estOdds(t1pop);
+  const t2odds=top2?.odds||estOdds(t2pop);
 
   // TYPE1: 穴馬あり → ANA（ROI 209%）
   if(anaPool.length>0)return'ANA';
-  // TYPE2: ワイド狙い（少なくとも1頭が4人気以降でオッズ5倍以上が見込める）
-  if(t1pop<=6&&t2pop<=6&&(t1pop>=4||t2pop>=4))return'WIDE';
-  // それ以外はすべて見送り（鉄板複勝はROI 106%で利益が出ない）
+  // TYPE2: ワイド狙い
+  // 条件: 両方1-6人気 かつ 少なくとも1頭の単勝オッズが10倍以上
+  // （ワイドオッズ5倍以上を確保するための目安）
+  if(t1pop<=6&&t2pop<=6&&(t1odds>=10||t2odds>=10))return'WIDE';
+  // それ以外はすべて見送り
   return'SKIP';
 }
 function assignMarksV6(horses,ri){
